@@ -19,7 +19,7 @@ visible al usuario.
 - Instala dependencias reproducibles con `npm ci`.
 - Ejecuta `npm run lint`, `npm test`, `npm run test:ui` y `npm run build` según
   el área modificada. `npm test` ejecuta las pruebas de servidor y unidad con el
-  fixture sintético `test/legacy-property.json`; la suite actual tiene 90 pruebas.
+  fixture sintético `test/legacy-property.json`; la suite actual tiene 94 pruebas.
 - Para una prueba de interfaz aislada instala Chromium con
   `npx playwright install --with-deps chromium` y después ejecuta `npm run test:ui`.
 - `npm start` ejecuta el servidor; `npm run start:background` usa el iniciador

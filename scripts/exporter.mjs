@@ -117,7 +117,7 @@ const expressions = {
   closeProfile: `(()=>{document.querySelector('dialog[open] [data-kiwi-modal-header] button')?.click();return true})()`,
   listTop: `(()=>{const list=document.querySelector('ul[class*="conversation-list_"]');if(!list)throw new Error('No hay listado');list.scrollTop=0;return true})()`,
   listStep: `(()=>{const list=document.querySelector('ul[class*="conversation-list_"]');if(!list)throw new Error('No hay listado');list.scrollTop=Math.min(list.scrollHeight,list.scrollTop+Math.max(1,list.clientHeight*0.8));return true})()`,
-  cards: `(()=>{const list=document.querySelector('ul[class*="conversation-list_"]');return {referenceDay:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),cards:[...document.querySelectorAll('[data-conversation-id]')].map(e=>({id:e.dataset.conversationId,name:e.querySelector('[class*="card__meta"]>p')?.innerText,date:e.querySelector('[class*="card__date"] p')?.innerText,ad:e.querySelector('[class*="ad__price"]')?.innerText})),scroll:list?{top:list.scrollTop,height:list.clientHeight,total:list.scrollHeight}:null}})()`,
+  cards: `(()=>{const list=document.querySelector('ul[class*="conversation-list_"]');return {referenceDay:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),cards:[...document.querySelectorAll('[data-conversation-id]')].map(e=>({id:e.dataset.conversationId,name:e.querySelector('[class*="card__meta"]>p')?.innerText,date:e.querySelector('[class*="card__date"] p')?.innerText,ad:e.querySelector('[class*="ad__price"]')?.innerText})),loading:!!list&&(!!list.closest('[aria-busy="true"]')||!!list.querySelector('[aria-busy="true"],[role="progressbar"]')||!!list.parentElement?.querySelector('[role="progressbar"]')),scroll:list?{top:list.scrollTop,height:list.clientHeight,total:list.scrollHeight}:null}})()`,
   snapshot: `(()=>{
     const observedAt=new Date();
     const referenceAt=observedAt.toISOString();
@@ -191,38 +191,88 @@ async function save(dir,name,value){
 const valid = c => c && /^\d+$/.test(c.id??'') && typeof c.date==='string' && c.date.trim().length>0;
 
 async function discover(ev, wait, maxSteps, browserDay, sinceDate, untilDate, allProperties=false){
-  ev(expressions.listTop); await wait(150);
-  const found=new Map(); let boundary=null,bottomChecks=0,incompleteStreak=0,head=null;
+  const passes=allProperties?2:1;
+  let first=null;
+  for(let pass=0;pass<passes;pass++){
+    ev(expressions.listTop);await wait(150);
+    const found=new Map(),observed=new Map();
+    let boundary=null,boundaryId=null,bottomChecks=0,incompleteStreak=0,head=null;
+    for(let step=0;step<maxSteps;step++){
+      const state=ev(expressions.cards);
+      if(state.loading || state.cards?.some(c=>!valid(c))){
+        if(++incompleteStreak>=20)throw new Error('El listado de Idealista no terminó de cargar las fechas de los chats. Revisa Chrome y reintenta.');
+        bottomChecks=0;await wait(250);continue;
+      }
+      incompleteStreak=0;
+      if(head===null && state.scroll?.top===0)head=headSignature(state,browserDay);
+      const before=observed.size;
+      for(const c of state.cards??[]){
+        const observedDay=state.referenceDay??browserDay;
+        const activityDate=parseActivityDate(c.date,observedDay);
+        if(activityDate>observedDay)throw new Error('Idealista muestra una fecha de actividad que no se puede interpretar. Revisa el listado y reintenta.');
+        if(activityDate<sinceDate){boundary=c.date;boundaryId=c.id;break;}
+        observed.set(c.id,activityDate);
+        if(activityDate<=untilDate)found.set(c.id,{...c,activityDate});
+      }
+      if(boundary)break;
+      const scroll=state.scroll;
+      if(scroll && scroll.top+scroll.height>=scroll.total-2){
+        bottomChecks=observed.size>before?0:bottomChecks+1;
+        if(bottomChecks>=10)break;
+        await wait(1500);
+      } else {bottomChecks=0;await wait(200);}
+      ev(expressions.listStep);
+    }
+    if(!boundary && bottomChecks<10)throw new Error('No se pudo comprobar el final de los chats de hoy. Reintenta la sincronización.');
+    if(allProperties && !boundary && !observed.size)throw new Error('El listado de Idealista no mostró chats ni confirmó que esté vacío. Revisa Chrome y reintenta.');
+    const result={cards:[...found.values()].filter(c=>allProperties||c.ad===PROPERTY),boundary,discovered:found.size,
+      listIntegrity:boundary?`Límite desde ${sinceDate} comprobado: la siguiente entrada muestra una fecha anterior.`:
+        allProperties?'Final del listado estable en dos recorridos.':'Final del listado estable tras diez comprobaciones.',head};
+    if(!allProperties)return result;
+    const signature=JSON.stringify({cards:[...observed],boundaryId,boundary});
+    if(first){
+      if(signature!==first.signature || JSON.stringify(head)!==JSON.stringify(first.head))
+        throw new Error('El listado de chats cambió durante la sincronización. Revisa Chrome y reintenta.');
+      return result;
+    }
+    first={signature,head};
+  }
+}
+
+// Each call starts at the head because opening a chat can move the virtualized list.
+// The first unseen card is therefore still the next card in Idealista's DOM order.
+async function nextRecentCard(ev,wait,maxSteps,browserDay,sinceDate,untilDate,seen,initialHead){
+  ev(expressions.listTop);await wait(150);
+  let incompleteStreak=0,bottomChecks=0,head=initialHead;
   for(let step=0;step<maxSteps;step++){
     const state=ev(expressions.cards);
-    if(state.cards?.some(c=>!valid(c))){
+    if(state.loading || state.cards?.some(c=>!valid(c))){
       if(++incompleteStreak>=20)throw new Error('El listado de Idealista no terminó de cargar las fechas de los chats. Revisa Chrome y reintenta.');
-      await wait(250);continue;
+      bottomChecks=0;await wait(250);continue;
     }
     incompleteStreak=0;
-    if(head===null && state.scroll?.top===0)head=headSignature(state,browserDay);
-    const before=found.size;
-    for(const c of state.cards??[]){
-      const observedDay=state.referenceDay??browserDay;
-      const activityDate=parseActivityDate(c.date,observedDay);
-      if(activityDate>observedDay)throw new Error('Idealista muestra una fecha de actividad que no se puede interpretar. Revisa el listado y reintenta.');
-      if(activityDate<sinceDate){boundary=c.date;break;}
-      if(activityDate<=untilDate)found.set(c.id,{...c,activityDate});
+    if(state.scroll?.top===0){
+      const currentHead=headSignature(state,browserDay);
+      if(head===null)head=currentHead;
+      else if(JSON.stringify(head)!==JSON.stringify(currentHead))return {head,changed:true};
     }
-    if(boundary)break;
+    for(const card of state.cards??[]){
+      const observedDay=state.referenceDay??browserDay;
+      const activityDate=parseActivityDate(card.date,observedDay);
+      if(activityDate>observedDay)throw new Error('Idealista muestra una fecha de actividad que no se puede interpretar. Revisa el listado y reintenta.');
+      if(activityDate<sinceDate)return {head,card:null};
+      if(seen.has(card.id))continue;
+      seen.add(card.id);
+      if(activityDate<=untilDate)return {head,card:{...card,activityDate}};
+    }
     const scroll=state.scroll;
     if(scroll && scroll.top+scroll.height>=scroll.total-2){
-      bottomChecks=found.size>before?0:bottomChecks+1;
-      if(bottomChecks>=10){
-        if(allProperties)throw new Error('El listado terminó antes de mostrar chats anteriores al inicio del alquiler. Espera a que cargue por completo y reintenta.');
-        break;
-      }
+      if(++bottomChecks>=10)return {head,card:null};
       await wait(1500);
-    } else {bottomChecks=0;await wait(200);}
+    }else{bottomChecks=0;await wait(200);}
     ev(expressions.listStep);
   }
-  if(!boundary && bottomChecks<10)throw new Error('No se pudo comprobar el final de los chats de hoy. Reintenta la sincronización.');
-  return {cards:[...found.values()].filter(c=>allProperties||c.ad===PROPERTY),boundary,discovered:found.size,listIntegrity:boundary?`Límite desde ${sinceDate} comprobado: la siguiente entrada muestra una fecha anterior.`:'Final del listado estable en tres comprobaciones.',head};
+  throw new Error('No se pudo comprobar el final de los chats de hoy. Reintenta la sincronización.');
 }
 
 function headSignature(state,browserDay){
@@ -238,7 +288,7 @@ async function recheckHead(ev,wait,head,browserDay){
   for(let attempt=0;attempt<5;attempt++){
     await wait(150);
     const state=ev(expressions.cards);
-    if(state?.scroll?.top!==0 || state?.cards?.some(c=>!valid(c)))continue;
+    if(state?.loading || state?.scroll?.top!==0 || state?.cards?.some(c=>!valid(c)))continue;
     try {
       const current=JSON.stringify(headSignature(state,browserDay));
       if(current!==JSON.stringify(head))return false;
@@ -383,7 +433,17 @@ export async function exportToday({knownIds=[],sinceDate,untilDate,propertyId,pe
       await mkdir(dir,{recursive:true,mode:0o700});
       ev(expressions.closeProfile);
       onProgress({phase:'discovering'});
-      let scan=await discover(ev,wait,maxListSteps,day,cutoff,end,refreshExisting);
+      const streamIncremental=periodId && scanMode==='incremental' && canEarlyStop;
+      const seen=new Set();
+      let streaming=Boolean(streamIncremental);
+      let scan=streaming?{cards:[],boundary:null,discovered:0,listIntegrity:'Recorrido reciente en curso.',head:null}:
+        await discover(ev,wait,maxListSteps,day,cutoff,end,refreshExisting);
+      if(streaming){
+        const next=await nextRecentCard(ev,wait,maxListSteps,day,cutoff,end,seen,null);
+        scan.head=next.head;
+        if(next.card){scan.cards.push(next.card);scan.discovered=1;}
+        else{streaming=false;scan=await discover(ev,wait,maxListSteps,day,cutoff,end,refreshExisting);}
+      }
       const known=new Set(knownIds.map(String));
       let candidates=sync&&!refreshExisting?scan.cards.filter(c=>!known.has(c.id)):scan.cards;
       onProgress({phase:'exporting',discovered:scan.discovered,candidates:candidates.length,exported:0,examined:0});
@@ -400,9 +460,30 @@ export async function exportToday({knownIds=[],sinceDate,untilDate,propertyId,pe
       index.conversations=[...entries.values()];await save(dir,'index.json',index);
       let files=[];let exported=0,processed=0,skippedProperty=0,skippedNoPeriodActivity=0;
       let examined=0,earlyStopped=false,stopReason=null,unchangedStreak=0,finalVisited=0,headRechecked=false;
-      let effectiveMode=scanMode==='incremental'&&canEarlyStop&&scan.head?'incremental':'full';
+      let effectiveMode=streaming&&scan.head?'incremental':'full';
       let restarted=false;
-      for(let cursor=0;cursor<candidates.length;cursor++){
+      for(let cursor=0;;cursor++){
+        if(cursor>=candidates.length){
+          if(!streaming)break;
+          const next=await nextRecentCard(ev,wait,maxListSteps,day,cutoff,end,seen,scan.head);
+          if(next.card && !next.changed){
+            scan.cards.push(next.card);scan.discovered=scan.cards.length;
+          }else{
+            const complete=await discover(ev,wait,maxListSteps,day,cutoff,end,refreshExisting);
+            const completeCandidates=complete.cards;
+            const prefixMatches=!next.changed&&candidates.every((card,i)=>
+              completeCandidates[i]?.id===card.id && completeCandidates[i]?.activityDate===card.activityDate);
+            streaming=false;scan=complete;candidates=completeCandidates;
+            index.listIntegrity=scan.listIntegrity;index.boundaryDate=scan.boundary;
+            if(!prefixMatches){
+              if(restarted)throw new Error('El listado de chats cambió durante la sincronización. Revisa Chrome y reintenta.');
+              restarted=true;effectiveMode='full';unchangedStreak=0;
+              files=[];exported=0;processed=0;skippedProperty=0;skippedNoPeriodActivity=0;finalVisited=0;
+              cursor=-1;continue;
+            }
+            if(cursor>=candidates.length)break;
+          }
+        }
         if(processed>=limit)break;
         const card=candidates[cursor];
         finalVisited++;
@@ -434,7 +515,7 @@ export async function exportToday({knownIds=[],sinceDate,untilDate,propertyId,pe
         Object.assign(entry,{status:'guardado',messages:result.messages.length,profile:result.integrity.profile,history:result.integrity.history});
         await save(dir,'index.json',index);files.push(file);exported++;processed++;
         onProgress({phase:'exporting',discovered:scan.discovered,candidates:candidates.length,exported,examined});
-        if(effectiveMode==='incremental'&&unchangedStreak>=unchangedThreshold&&cursor<candidates.length-1){
+        if(effectiveMode==='incremental'&&unchangedStreak>=unchangedThreshold&&(streaming||cursor<candidates.length-1)){
           if(await recheckHead(ev,wait,scan.head,day)){
             headRechecked=true;earlyStopped=true;stopReason='unchanged_streak';break;
           }
@@ -442,6 +523,7 @@ export async function exportToday({knownIds=[],sinceDate,untilDate,propertyId,pe
           // then reread every candidate, including those seen in the first pass.
           if(restarted)throw new Error('El listado de chats cambió durante la sincronización. Revisa Chrome y reintenta.');
           restarted=true;effectiveMode='full';unchangedStreak=0;
+          streaming=false;
           scan=await discover(ev,wait,maxListSteps,day,cutoff,end,refreshExisting);
           candidates=sync&&!refreshExisting?scan.cards.filter(c=>!known.has(c.id)):scan.cards;
           files=[];exported=0;processed=0;skippedProperty=0;skippedNoPeriodActivity=0;finalVisited=0;
@@ -455,7 +537,16 @@ export async function exportToday({knownIds=[],sinceDate,untilDate,propertyId,pe
           throw new Error('El listado de chats cambió durante la sincronización. Revisa Chrome y reintenta.');
         headRechecked=true;
       }
+      if(!earlyStopped && !headRechecked && scan.head){
+        if(!(await recheckHead(ev,wait,scan.head,day)))
+          throw new Error('El listado de chats cambió durante la sincronización. Revisa Chrome y reintenta.');
+        headRechecked=true;
+      }
       const fullCoverage=!earlyStopped&&finalVisited===candidates.length;
+      if(earlyStopped){
+        index.listIntegrity='Recorrido reciente detenido tras cinco chats sin cambios; final del listado no comprobado.';
+        index.boundaryDate=null;
+      }
       Object.assign(index,{scanStatus:'complete',requestedMode:scanMode,effectiveMode,examined,earlyStopped,stopReason,unchangedStreak,unchangedThreshold,fullCoverage,headRechecked});
       index.updatedAt=new Date().toISOString();await save(dir,'index.json',index);
       await save(dir,'index.md',`# Chats de ${day}\n\n${index.criterion}\n\n${index.listIntegrity}\n\n`+index.conversations.map(e=>`- [${e.name}](${e.id}.md) — ${e.date} — ${e.status}${e.messages!==undefined?` — ${e.messages} mensajes — ficha: ${e.profile}`:''}`).join('\n')+'\n');

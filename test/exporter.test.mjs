@@ -8,7 +8,7 @@ import { fingerprintMessageHistory } from '../scripts/message-history.mjs';
 
 const card=(id,date='12:30')=>({id,name:`Persona ${id}`,date,ad:'825 €/mes - Piso de prueba'});
 const snapshot=(id,properties=[{url:'https://www.idealista.com/inmueble/13579135/',text:'Anuncio'}],rawText='Hola')=>({activeId:id,name:`Persona ${id}`,messages:[{sequence:1,dateLabel:'Hoy',time:'12:30',author:'Persona',direction:'received',text:rawText,embeddedProfile:null,rawText,attachments:[],media:[],domClass:''}],historyText:rawText,properties,scroll:{top:0,height:100,total:100},historyButtons:[],profileAvailable:false});
-function fake({pages=[[card('1'),card('2')],[card('3'),{id:'0',date:'Ayer',ad:'otro'}]],draft=false,readyAfter=0,day='2026-09-23',propertyById={},messageById={},messagesById={},unstableHistoryIds=[],dateLoadingReads=0,appendPageAfterReads=Infinity,appendPage=null,transientHistorySnapshot=false,switchedHistoryId=null,moveHeadAfterOpens=Infinity,moveHeadAgainAfterOpens=Infinity}={}){
+function fake({pages=[[card('1'),card('2')],[card('3'),{id:'0',date:'Ayer',ad:'otro'}]],draft=false,readyAfter=0,day='2026-09-23',propertyById={},messageById={},messagesById={},unstableHistoryIds=[],dateLoadingReads=0,loadingReads=0,loadingAfterOpens=Infinity,appendPageAfterReads=Infinity,appendPage=null,transientHistorySnapshot=false,switchedHistoryId=null,moveHeadAfterOpens=Infinity,moveHeadAgainAfterOpens=Infinity,failIfTailAfterOpens=Infinity}={}){
   let page=0,active=null,reloaded=false,readyCalls=0,historyReads=0,cardReads=0,historyTopCalls=0,pendingSnapshot=null,opens=0;const calls=[];
   const ev=expression=>{
     calls.push(expression);
@@ -20,11 +20,11 @@ function fake({pages=[[card('1'),card('2')],[card('3'),{id:'0',date:'Ayer',ad:'o
     if(expression===expressions.day)return day;
     if(expression===expressions.closeProfile)return true;
     if(expression===expressions.listTop){page=0;return true;}
-    if(expression===expressions.listStep){page=Math.min(page+1,pages.length-1);return true;}
+    if(expression===expressions.listStep){if(opens>=failIfTailAfterOpens)throw new Error('Scanned the tail after the unchanged streak');page=Math.min(page+1,pages.length-1);return true;}
     if(expression===expressions.cards){
       cardReads++;
       if(cardReads===appendPageAfterReads && appendPage)pages.push(appendPage);
-      return {referenceDay:day,cards:cardReads<=dateLoadingReads?pages[page].map((c,i)=>i?c:{...c,date:''}):pages[page],scroll:{top:page*80,height:100,total:pages.length*80+20}};
+      return {referenceDay:day,cards:cardReads<=dateLoadingReads?pages[page].map((c,i)=>i?c:{...c,date:''}):pages[page],loading:cardReads<=loadingReads||opens>=loadingAfterOpens,scroll:{top:page*80,height:100,total:pages.length*80+20}};
     }
     if(expression.includes('button[data-testid="list-card-test-id"]')){const id=expression.match(/dataset.conversationId==="(\d+)"/)?.[1];assert.ok(pages[page].some(c=>c.id===id));active=id;opens++;if(opens===moveHeadAfterOpens)pages[0].unshift(card('8','12:31'));if(opens===moveHeadAgainAfterOpens)pages[0].unshift(card('9','12:32'));return true;}
     if(expression===expressions.snapshot){
@@ -157,9 +157,25 @@ test('late lazy page is collected beyond three bottom checks',async t=>inTemp(t,
   assert.deepEqual(result.files.map(file=>path.basename(file)),['1.json','2.json']);
 }));
 
-test('refresh fails if lazy list never shows older boundary',async t=>inTemp(t,async root=>{
+test('property refresh accepts a verified one-page list entirely within the rental period',async t=>inTemp(t,async root=>{
   const browser=fake({day:'2026-09-24',pages:[[card('1','00:07')]]});
-  await assert.rejects(exportToday({root,connectBrowser:()=>browser.ev,wait:instant,sync:true,sinceDate:'2026-09-23',untilDate:'2026-09-24',propertyId:'13579135',refreshExisting:true}),/antes de mostrar chats anteriores/);
+  const result=await exportToday({root,connectBrowser:()=>browser.ev,wait:instant,sync:true,sinceDate:'2026-09-23',untilDate:'2026-09-24',propertyId:'13579135',refreshExisting:true});
+  assert.deepEqual(result.files.map(file=>path.basename(file)),['1.json']);
+  assert.equal(result.fullCoverage,true);
+  assert.match(JSON.parse(await readFile(path.join(result.directory,'index.json'),'utf8')).listIntegrity,/dos recorridos/);
+}));
+
+test('an unfinished or changing property list never claims full coverage',async t=>inTemp(t,async root=>{
+  const loading=fake({pages:[[card('1')]],loadingReads:Infinity});
+  await assert.rejects(exportToday({root:path.join(root,'loading'),connectBrowser:()=>loading.ev,wait:instant,
+    sync:true,propertyId:'13579135',refreshExisting:true}),/no terminó de cargar/);
+  const changing=fake({pages:[[card('1')]],appendPageAfterReads:12,appendPage:[card('2')]});
+  const previous=path.join(root,'changing','exports','2026-09-23','property-13579135','1.json');
+  await mkdir(path.dirname(previous),{recursive:true});
+  await writeFile(previous,'{"previous":"complete"}');
+  await assert.rejects(exportToday({root:path.join(root,'changing'),connectBrowser:()=>changing.ev,wait:instant,
+    sync:true,propertyId:'13579135',refreshExisting:true}),/listado de chats cambió/);
+  assert.equal(await readFile(previous,'utf8'),'{"previous":"complete"}');
 }));
 
 test('a transient missing detail is retried while keeping the same conversation ID',async t=>inTemp(t,async root=>{
@@ -276,6 +292,17 @@ const periodId='5e7e9db2-610d-4955-9969-8d8bd53b23dd';
 const periodOptions={periodId,propertyId:'13579135',sinceDate:'2026-09-23',untilDate:'2026-09-23',activityStartsAt:'2026-09-22T22:00:00.000Z',includeLegacyHistory:false,refreshExisting:true,sync:true};
 const message=(dateLabel,time,rawText)=>({sequence:1,dateLabel,time,author:'Persona',direction:'received',text:rawText,embeddedProfile:null,rawText,attachments:[],media:[],domClass:''});
 
+test('first period sync finishes a multi-page list with no older chat and excludes another listing',async t=>inTemp(t,async root=>{
+  const other={url:'https://www.idealista.com/inmueble/12345678/',text:'Otro anuncio'};
+  const browser=fake({pages:[[card('1')],[card('2')],[card('3')]],propertyById:{'2':[other]}});
+  const result=await exportToday({root,connectBrowser:()=>browser.ev,wait:instant,
+    ...periodOptions,scanMode:'incremental',canEarlyStop:false});
+  assert.equal(result.effectiveMode,'full');
+  assert.equal(result.fullCoverage,true);
+  assert.deepEqual(result.files.map(file=>path.basename(file)),['1.json','3.json']);
+  assert.equal(result.skippedProperty,1);
+}));
+
 test('period export projects only verified new messages from a reused chat and isolates its files',async t=>inTemp(t,async root=>{
   const browser=fake({pages:[[card('1','12:31')],[card('2','Ayer')]],messagesById:{'1':[message('01/02/2022','20:14','Old'),message('HOY','12:31','New')]}});
   const result=await exportToday({root,connectBrowser:()=>browser.ev,wait:instant,knownIds:['1'],...periodOptions});
@@ -375,13 +402,15 @@ test('ordered semantic fingerprint ignores profile/display noise but detects out
 });
 
 test('incremental mode stops after five unchanged known target chats and records partial coverage',async t=>inTemp(t,async root=>{
-  const browser=fake({pages:sevenCards()});
+  const browser=fake({pages:[[...Array.from({length:5},(_,i)=>card(String(i+1)))],[card('6'),card('7')],[card('99','Ayer')]],failIfTailAfterOpens:5});
   const result=await exportToday({root,connectBrowser:()=>browser.ev,wait:instant,...incremental,
     knownIds:Object.keys(sevenBaselines()),baselineById:sevenBaselines()});
   assert.deepEqual({candidates:result.candidates,examined:result.examined,exported:result.exported,earlyStopped:result.earlyStopped,
     stopReason:result.stopReason,fullCoverage:result.fullCoverage,headRechecked:result.headRechecked},
-  {candidates:7,examined:5,exported:5,earlyStopped:true,stopReason:'unchanged_streak',fullCoverage:false,headRechecked:true});
-  assert.equal(JSON.parse(await readFile(path.join(result.directory,'index.json'),'utf8')).fullCoverage,false);
+  {candidates:5,examined:5,exported:5,earlyStopped:true,stopReason:'unchanged_streak',fullCoverage:false,headRechecked:true});
+  const index=JSON.parse(await readFile(path.join(result.directory,'index.json'),'utf8'));
+  assert.equal(index.fullCoverage,false);
+  assert.match(index.listIntegrity,/final del listado no comprobado/);
   assert.deepEqual(result.files.map(file=>path.basename(file)),['1.json','2.json','3.json','4.json','5.json']);
 }));
 
@@ -446,4 +475,16 @@ test('a second moving head fails instead of accepting a changing full pass',asyn
     knownIds:Object.keys(sevenBaselines()),baselineById:sevenBaselines()}),/listado de chats cambió/);
   const index=JSON.parse(await readFile(path.join(root,'exports','2026-09-23','property-13579135',`period-${periodId}`,'index.json'),'utf8'));
   assert.equal(index.scanStatus,'in_progress');assert.equal(index.fullCoverage,false);
+}));
+
+test('a loader at head recheck cannot certify an incremental stop',async t=>inTemp(t,async root=>{
+  const browser=fake({pages:sevenCards(),loadingAfterOpens:5});
+  await assert.rejects(exportToday({root,connectBrowser:()=>browser.ev,wait:instant,...incremental,
+    knownIds:Object.keys(sevenBaselines()),baselineById:sevenBaselines()}),/no terminó de cargar/);
+}));
+
+test('a changed head during full extraction cannot claim complete coverage',async t=>inTemp(t,async root=>{
+  const browser=fake({pages:sevenCards(),moveHeadAfterOpens:2});
+  await assert.rejects(exportToday({root,connectBrowser:()=>browser.ev,wait:instant,...incremental,
+    scanMode:'full',canEarlyStop:false}),/listado de chats cambió/);
 }));
