@@ -50,6 +50,7 @@ await page.route(legacyPeriodRoute, route => route.fulfill({status:404,contentTy
 let syncPosts = 0;
 const syncPostPaths = [];
 const syncPostBodies = [];
+let nextSyncPostDelay = 0;
 let nextIncrementalEffectiveMode='full';
 let failNextNoteSave = false;
 let fakeSyncJob = { id: null, state: 'idle', phase: null, startedAt: null, endedAt: null, discovered: 0, candidates: 0, exported: 0, imported: 0, error: null, errorCode: null };
@@ -58,6 +59,7 @@ await page.route(url => /\/api\/(?:properties\/[^/]+\/(?:periods\/[^/]+\/)?)?syn
   const path = new URL(route.request().url()).pathname;
   const supportsSyncModes=path.includes('/periods/');
   if (method === 'POST') {
+    if(nextSyncPostDelay){const delay=nextSyncPostDelay;nextSyncPostDelay=0;await new Promise(resolve=>setTimeout(resolve,delay));}
     syncPosts++;
     syncPostPaths.push(path);
     const requestBody=JSON.parse(route.request().postData()||'{}');
@@ -393,7 +395,11 @@ try {
   assert.equal(await page.locator('#sync').isDisabled(), true);
   fakeSyncJob = { ...fakeSyncJob, state: 'failed', phase: null, error: 'Prueba terminada' };
   await page.getByText('Prueba terminada').waitFor({ timeout: 2500 });
+  nextSyncPostDelay = 250;
+  const syncResponse = page.waitForResponse(response => response.request().method()==='POST' && /\/sync$/.test(new URL(response.url()).pathname));
   await page.locator('#sync').click();
+  const posted = await syncResponse;
+  assert.equal(new URL(posted.url()).pathname, `/api/properties/${rioId}/sync`);
   assert.equal(syncPostPaths.at(-1), `/api/properties/${rioId}/sync`);
   assert.equal(fakeSyncJob.propertyId, rioId);
   fakeSyncJob = { ...fakeSyncJob, state: 'failed', phase: null, error: 'Prueba terminada' };
