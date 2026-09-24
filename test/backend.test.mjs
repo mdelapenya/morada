@@ -306,10 +306,10 @@ test('conserva chats con el mismo nombre, estado local y mensajes al reimportar'
   ] });
   assert.equal(importConversation(db, newer, 'fixture/10.json', '2026-09-23'), true);
   assert.equal(db.prepare('select count(*) n from messages where conversation_id=?').get('10').n, 2);
-  assert.deepEqual(db.prepare('select favorite,discarded from applicants where id=?').get('chat:10'), { favorite: 1, discarded: 1 });
+  assert.deepEqual({ ...db.prepare('select favorite,discarded from applicants where id=?').get('chat:10') }, { favorite: 1, discarded: 1 });
   db.close();
   const reopened = openDatabase(filename);
-  assert.deepEqual(reopened.prepare('select favorite,discarded from applicants where id=?').get('chat:10'), { favorite: 1, discarded: 1 });
+  assert.deepEqual({ ...reopened.prepare('select favorite,discarded from applicants where id=?').get('chat:10') }, { favorite: 1, discarded: 1 });
   reopened.close();
 });
 
@@ -424,7 +424,7 @@ test('notes migration preserves existing favorite and discard flags', t => {
   db.exec('ALTER TABLE applicants DROP COLUMN notes');
   db.close();
   const reopened = openDatabase(filename);
-  assert.deepEqual(reopened.prepare('SELECT favorite,discarded,notes FROM applicants WHERE id=?').get('chat:90'),
+  assert.deepEqual({ ...reopened.prepare('SELECT favorite,discarded,notes FROM applicants WHERE id=?').get('chat:90') },
     { favorite: 1, discarded: 1, notes: '' });
   reopened.close();
 });
@@ -602,8 +602,8 @@ test('CLI import reads legacy and property namespaces without duplicating or cle
   updateApplicant(db,'402',{favorite:true,notes:'Privado'},second.id);
   assert.equal(importExports(db,root,mapping).conversations,2);
   assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n,2);
-  assert.deepEqual(db.prepare('SELECT favorite,notes,property_id FROM applicants WHERE id=?')
-    .get(applicantDetail(db,'402',second.id).applicant_id),
+  assert.deepEqual({ ...db.prepare('SELECT favorite,notes,property_id FROM applicants WHERE id=?')
+    .get(applicantDetail(db,'402',second.id).applicant_id) },
     {favorite:1,notes:'Privado',property_id:second.id});
 });
 
@@ -702,7 +702,7 @@ test('changing an imported listing keeps old chat source and separates the same 
   assert.equal(chats[0].source_idealista_id,'12345678');
   assert.equal(chats[1].source_idealista_id,'13579135');
   assert.equal(db.prepare('SELECT favorite,notes FROM applicants WHERE id=?').get(chats[1].applicant_id).notes,'Nota antigua');
-  assert.deepEqual(db.prepare('SELECT favorite,notes FROM applicants WHERE id=?').get(chats[0].applicant_id),
+  assert.deepEqual({ ...db.prepare('SELECT favorite,notes FROM applicants WHERE id=?').get(chats[0].applicant_id) },
     {favorite:0,notes:''});
   assert.equal(listApplicants(db,new URLSearchParams({status:'all',messageQuery:'antiguo'})).length,1);
   assert.equal(listApplicants(db,new URLSearchParams({status:'all',messageQuery:'nuevo'})).length,1);
@@ -722,7 +722,7 @@ test('changing an imported listing keeps old chat source and separates the same 
   updateApplicant(db,chats[0].applicant_id,{notes:'Otra nota privada'});
   assert.equal(listApplicants(db,new URLSearchParams({status:'all'}))
     .find(item=>item.applicant_id===chats[0].applicant_id).messageCount,1);
-  assert.deepEqual(db.prepare('SELECT favorite,notes FROM applicants WHERE id=?').get(chats[1].applicant_id),
+  assert.deepEqual({ ...db.prepare('SELECT favorite,notes FROM applicants WHERE id=?').get(chats[1].applicant_id) },
     {favorite:1,notes:'Nota antigua'});
 });
 

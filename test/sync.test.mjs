@@ -186,7 +186,7 @@ test('first incremental completes a full baseline, then five unchanged chats sto
     partial.stopReason,partial.fullCoverage],[5,6,true,'unchanged_streak',false]);
   const saved=x.db.prepare('SELECT raw_json FROM conversations WHERE external_chat_id=?').get('306');
   assert.equal(JSON.parse(saved.raw_json).messages.length,1);
-  assert.deepEqual(x.db.prepare('SELECT notes,favorite FROM applicants WHERE id=?').get('chat:306'),
+  assert.deepEqual({ ...x.db.prepare('SELECT notes,favorite FROM applicants WHERE id=?').get('chat:306') },
     {notes:'Nota privada',favorite:1});
   assert.equal(x.db.prepare('SELECT count(*) AS n FROM sync_attention').get().n,0);
   assert.equal(x.db.prepare('SELECT batch_id FROM sync_source_baselines').get().batch_id,full.id,
@@ -270,7 +270,7 @@ test('successful sync persists only new applicants and added received messages u
   const added=response.items.find(item=>item.applicant_id==='chat:202');
   assert.deepEqual([existing.syncAttention,existing.newIncomingCount],['message',1]);
   assert.deepEqual([added.syncAttention,added.newIncomingCount],['new',0]);
-  assert.deepEqual(x.db.prepare('SELECT favorite,notes FROM applicants WHERE id=?').get('chat:201'),
+  assert.deepEqual({ ...x.db.prepare('SELECT favorite,notes FROM applicants WHERE id=?').get('chat:201') },
     {favorite:1,notes:'Nota privada'});
   const restartRead=new DatabaseSync(x.dbPath,{readOnly:true});
   assert.equal(restartRead.prepare('SELECT count(*) n FROM sync_attention').get().n,2);
@@ -433,7 +433,7 @@ test('imports only new IDs, preserves states and histories, and supports repeat 
   assert.equal(first.updated, 1);
   assert.equal(x.db.prepare('SELECT count(*) n FROM conversations').get().n, 3);
   assert.equal(x.db.prepare('SELECT count(*) n FROM applicants WHERE display_name=?').get('Nombre compartido').n, 3);
-  assert.deepEqual(x.db.prepare('SELECT favorite,discarded FROM applicants WHERE id=?').get('chat:10'),
+  assert.deepEqual({ ...x.db.prepare('SELECT favorite,discarded FROM applicants WHERE id=?').get('chat:10') },
     { favorite: 0, discarded: 1 });
   assert.equal(x.db.prepare('SELECT notes FROM applicants WHERE id=?').get('chat:10').notes,
     '  Nota privada\nsegunda línea  ');
@@ -630,7 +630,7 @@ test('scoped sync refreshes only its housing and preserves manual applicant', as
   const second71=x.db.prepare('SELECT id,applicant_id FROM conversations WHERE period_id=? AND external_chat_id=?')
     .get(second.activePeriodId,'71');
   assert.equal(x.db.prepare('SELECT count(*) n FROM messages WHERE conversation_id=?').get(second71.id).n,2);
-  assert.deepEqual(x.db.prepare('SELECT favorite,notes FROM applicants WHERE id=?').get(second71.applicant_id),
+  assert.deepEqual({ ...x.db.prepare('SELECT favorite,notes FROM applicants WHERE id=?').get(second71.applicant_id) },
     {favorite:1,notes:'Nota local'});
   assert.equal(x.db.prepare('SELECT notes FROM applicants WHERE id=?').get(manual.applicant_id).notes,'No es chat');
   assert.equal(x.db.prepare('SELECT property_id FROM applicants WHERE id=?').get('chat:70').property_id,'13579135');
