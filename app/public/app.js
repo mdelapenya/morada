@@ -1,3 +1,4 @@
+import { normalizeTimeZone, localDateTimeParts, localTimeCandidates, civilDayBounds, addCivilDays } from './visit-time.mjs';
 const el = id => document.getElementById(id);
 const filterIds = ['name','messageQuery','date','reply','pendingReply','children','pets','peopleMin','peopleMax','incomeMin','incomeMax','scope'];
 let status = new URLSearchParams(location.search).get('status') || 'active';
@@ -15,13 +16,24 @@ const money = new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR',max
 const collator = new Intl.Collator('es',{numeric:true,sensitivity:'base'});
 const sortLabels = {favorite:'Favoritos',name:'Interesado',arrivalDate:'Fecha de llegada',hasReplied:'Respuesta',awaitingReply:'Seguimiento',people_count:'Personas',has_children:'Niños',has_pets:'Mascotas',monthly_income_eur:'Ingresos'};
 const initialParams = new URLSearchParams(location.search);
-const isHome=!initialParams.has('propertyId');
+const isCalendar=initialParams.get('view')==='calendar';
+const isHome=!isCalendar&&!initialParams.has('propertyId');
+let browserZone='UTC';try{browserZone=normalizeTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);}catch{}
+let viewZone=browserZone;try{const saved=localStorage.getItem('calendarTimezone');if(saved)viewZone=normalizeTimeZone(saved);}catch{}
+const todayInZone=timezone=>localDateTimeParts(Date.now(),timezone).date;
+function zoneOptions(select,selected) {
+ const zones=new Set(['UTC','Europe/Madrid',browserZone,viewZone,selected]);
+ if(Intl.supportedValuesOf)for(const zone of Intl.supportedValuesOf('timeZone'))zones.add(zone);
+ select.replaceChildren(...[...zones].sort((a,b)=>a.localeCompare(b)).map(zone=>new Option(zone,zone)));
+ select.value=selected;
+}
 let homeViewMode='grid';try{homeViewMode=localStorage.getItem('housingView')==='list'?'list':'grid';}catch{}
 let homeCategory='active', homeDeleteReady=false;
 let filtersVisible=true;try{filtersVisible=localStorage.getItem('filtersVisible')!=='hidden';}catch{}
 function setFiltersVisible(visible){filtersVisible=visible;el('filterPanel').hidden=!visible;el('workspaceLayout').classList.toggle('filters-collapsed',!visible);el('toggleFilters').setAttribute('aria-expanded',String(visible));el('toggleFilters').textContent=visible?'Ocultar filtros':'Mostrar filtros';el('toggleFilters').title=visible?'':'Los filtros siguen aplicados';try{localStorage.setItem('filtersVisible',visible?'visible':'hidden');}catch{}}
 el('toggleFilters').onclick=()=>setFiltersVisible(!filtersVisible);setFiltersVisible(filtersVisible);
 let pendingInitialPeriodId=initialParams.get('periodId');
+let pendingInitialApplicantId=initialParams.get('applicantId');
 for (const id of filterIds.filter(id=>!['date','incomeMin','incomeMax'].includes(id))) if (initialParams.has(id)) el(id).value = initialParams.get(id);
 let incomeCeiling=5000;const requestedIncomeMin=Number(initialParams.get('incomeMin'))||0,requestedIncomeMax=Number(initialParams.get('incomeMax'))||0;
 
@@ -29,7 +41,7 @@ function node(tag, text, className) {const n=document.createElement(tag);if(text
 const displayDate=value=>new Date(`${value}T12:00:00`).toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'});
 function error(message) {el('error').textContent=message;el('error').hidden=!message;}
 function toast(message) {el('toast').textContent=message;el('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>el('toast').hidden=true,3500);}
-async function api(url,options) {const response=await fetch(url,options);const body=await response.json();if(!response.ok)throw new Error(body.error||'No se pudo completar la operación');return body;}
+async function api(url,options) {const response=await fetch(url,options);let body={};try{body=await response.json();}catch{}if(!response.ok){const failure=new Error(body.error||'No se pudo completar la operación');Object.assign(failure,body,{status:response.status});throw failure;}return body;}
 function housingUrl(id){const params=new URLSearchParams({propertyId:id});return `/?${params}`;}
 function setHomeView(mode){homeViewMode=mode;el('homeProperties').dataset.view=mode;el('homeGrid').setAttribute('aria-pressed',String(mode==='grid'));el('homeList').setAttribute('aria-pressed',String(mode==='list'));try{localStorage.setItem('housingView',mode);}catch{}}
 el('homeGrid').onclick=()=>setHomeView('grid');el('homeList').onclick=()=>setHomeView('list');setHomeView(homeViewMode);
@@ -144,7 +156,7 @@ async function load() {
   el('date').value=date;datesInitialized=true;
   for(const [id,key] of [['total','total'],['favoriteCount','favorites'],['discardedCount','discarded'],['activeBadge','active'],['favoriteBadge','favorites'],['discardedBadge','discarded']])el(id).textContent=result.counts[key];
   el('count').textContent=`${result.items.length} ${result.items.length===1?'interesado':'interesados'}${filterIds.some(id=>(id!=='reply'||replyFilterReady)&&(id!=='pendingReply'||pendingFilterReady)&&el(id).value)?' con estos filtros':''}`;
-  currentItems=result.items;if(!arrivalReady&&result.items.some(item=>Object.hasOwn(item,'arrivalDate')))arrivalReady=true;if(!replyReady&&result.items.some(item=>Object.hasOwn(item,'hasReplied')))replyReady=true;if(!pendingReady&&result.items.some(item=>Object.hasOwn(item,'awaitingReply')))pendingReady=true;document.querySelector('th[data-sort="arrivalDate"]').hidden=!arrivalReady;el('replyHeading').hidden=!replyReady;el('pendingReplyHeading').hidden=!pendingReady;renderItems();
+  currentItems=result.items;if(!arrivalReady&&result.items.some(item=>Object.hasOwn(item,'arrivalDate')))arrivalReady=true;if(!replyReady&&result.items.some(item=>Object.hasOwn(item,'hasReplied')))replyReady=true;if(!pendingReady&&result.items.some(item=>Object.hasOwn(item,'awaitingReply')))pendingReady=true;document.querySelector('th[data-sort="arrivalDate"]').hidden=!arrivalReady;el('replyHeading').hidden=!replyReady;el('pendingReplyHeading').hidden=!pendingReady;renderItems();if(pendingInitialApplicantId){const id=pendingInitialApplicantId;pendingInitialApplicantId=null;detail(id);}
  } catch(e){if(seq===requestId){error(e.message);el('count').textContent='No se ha podido cargar el listado';el('rows').replaceChildren();}}
 }
 function triCell(value) {return value===null?node('span','No indicado','unknown'):node('span',value?'Sí':'No',`pill${value?'':' no'}`);}
@@ -189,6 +201,7 @@ async function detail(id) {
   if(canEditPeriod())el('detailActions').append(actionButton(item.favorite?'★ Favorito':'☆ Guardar favorito','Cambiar favorito',b=>change(item,{favorite:!item.favorite},b)),actionButton(item.discarded?'Recuperar interesado':'Descartar interesado','Cambiar descartado',b=>change(item,{discarded:!item.discarded},b)),actionButton('Elegir inquilino y cerrar búsqueda',`Elegir a ${item.name} y cerrar búsqueda`,()=>reviewClose(item)));
   const body=el('detailBody');body.append(node('p',item.source==='manual'?'Interesado añadido manualmente':`Chat ${id} · Ficha: ${item.profile_status} · Historial: ${item.history_status}`,'integrity'));if(item.phone||item.email)body.append(node('p',[item.phone,item.email].filter(Boolean).join(' · '),'integrity'));
   if(capabilitiesReady){body.append(node('h3','Notas privadas','detail-label'));if(!canEditPeriod())body.append(node('div',item.notes||'Sin notas.','profile-text'));else{const notes=node('textarea',undefined,'notes-input');notes.id='detailNotes';notes.maxLength=10000;notes.setAttribute('aria-label','Notas privadas');const draftKey=`${propertyAtStart||'legacy'}:${periodAtStart||'legacy'}:${id}`;notes.value=noteDrafts.has(draftKey)?noteDrafts.get(draftKey):(item.notes||'');const saveNotes=actionButton('Guardar notas','Guardar notas',async button=>{button.disabled=true;const value=notes.value;try{await api(`${base}/${encodeURIComponent(item.applicant_id||id)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes:value})});if(propertyAtStart!==selectedPropertyId||periodAtStart!==selectedPeriodId)return;noteDrafts.delete(draftKey);noteFeedback.textContent='Notas guardadas.';await load();}catch(e){if(propertyAtStart===selectedPropertyId&&periodAtStart===selectedPeriodId){noteFeedback.textContent=e.message;button.disabled=false;}}});const noteFeedback=node('p','','note-feedback');notes.oninput=()=>{noteDrafts.set(draftKey,notes.value);noteFeedback.textContent='Cambios sin guardar.';};body.append(notes,saveNotes,noteFeedback);}}
+  renderApplicantVisits(item,id,body,{propertyId:propertyAtStart,periodId:periodAtStart,applicantId:item.applicant_id||id,editable:canEditPeriod()});
   body.append(node('h3','Ficha original','detail-label'),node('div',item.profile?.text??'Este interesado no tiene una ficha disponible.','profile-text'));
   const messages=[...(item.messages||[])].reverse();if(messages.length)body.append(node('h3',`Conversación · ${messages.length} mensajes`,'detail-label'));
   for(const m of messages){const article=node('article',undefined,`message ${m.direction}`);article.append(node('p',`${m.author} · ${m.dateLabel??'Fecha no indicada'} · ${m.time??''}`,'message-meta'),node('pre',m.rawText));body.append(article);}
@@ -197,6 +210,114 @@ async function detail(id) {
  }catch(e){if(detailSeq===detailRequestId&&propertyAtStart===selectedPropertyId&&periodAtStart===selectedPeriodId){el('detailName').textContent='No se pudo cargar la ficha';el('detailBody').append(node('p',e.message,'error'));}}
 }
 async function ackAttention(id,revision,context){const url=`/api/properties/${encodeURIComponent(context.propertyId)}/periods/${encodeURIComponent(context.periodId)}/applicants/${encodeURIComponent(id)}/attention/read`;try{const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision})});if(context.propertyId!==selectedPropertyId||context.periodId!==selectedPeriodId)return;if(response.ok){load();return;}if(response.status===409){load();if(currentDetail===id&&detailRequestId===context.detailSeq&&el('detail').open)el('detailBody').append(node('p','Han llegado mensajes nuevos. Cierra y vuelve a abrir esta ficha para verlos.','attention-notice'));}}catch{}}
+const visitStatus={pending_confirmation:'Pendiente de confirmar',confirmed:'Confirmada',completed:'Realizada',cancelled:'Cancelada'};
+let visitEditing=null,visitContext=null,visitFormZone=null;
+const visitUrl=(propertyId,periodId,applicantId)=>`/api/properties/${encodeURIComponent(propertyId)}/periods/${encodeURIComponent(periodId)}/applicants/${encodeURIComponent(applicantId)}/visits`;
+const localVisitValue=(value,timezone=viewZone)=>{const parts=localDateTimeParts(value,timezone);return `${parts.date}T${parts.time}`;};
+const visitWhen=(value,timezone=viewZone)=>new Intl.DateTimeFormat('es-ES',{timeZone:timezone,weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(value));
+const offsetLabel=minutes=>`UTC${minutes<0?'-':'+'}${String(Math.floor(Math.abs(minutes)/60)).padStart(2,'0')}:${String(Math.abs(minutes)%60).padStart(2,'0')}`;
+function updateVisitOffsets(preferredInstant=null){
+ const form=el('visitForm'),local=form.elements.startLocal.value,timezone=form.elements.timezone.value;
+ let candidates=[];try{if(local)candidates=localTimeCandidates(local,timezone);}catch{}
+ const select=form.elements.utcOffsetMinutes,previous=select.value;
+ el('visitOffsetLabel').hidden=candidates.length<2;
+ select.replaceChildren(...candidates.map((candidate,index)=>new Option(`${index===0?'Primera':'Segunda'} ocurrencia (${offsetLabel(candidate.utcOffsetMinutes)})`,String(candidate.utcOffsetMinutes))));
+ const matching=candidates.find(candidate=>candidate.instant===preferredInstant);
+ if(matching)select.value=String(matching.utcOffsetMinutes);
+ else if(candidates.some(candidate=>String(candidate.utcOffsetMinutes)===previous))select.value=previous;
+ return candidates;
+}
+function openVisitDialog(context,visit=null){
+ if(!context.editable)return;
+ visitContext=context;visitEditing=visit;
+ const form=el('visitForm'),timezone=visit?.timezone||viewZone;
+ form.reset();zoneOptions(el('visitTimezone'),timezone);visitFormZone=timezone;
+ form.querySelector('.form-error').textContent='';
+ el('visitDialogTitle').textContent=visit?'Reprogramar visita':'Programar visita';
+ el('visitDialogContext').textContent=`${context.name} · ${context.propertyTitle} · ${timezone}`;
+ form.elements.startLocal.value=visit?localVisitValue(visit.startsAt,timezone):`${todayInZone(timezone)}T10:00`;
+ form.elements.durationMinutes.value=String(visit?.durationMinutes||30);
+ form.elements.status.value=visit?.status==='confirmed'?'confirmed':'pending_confirmation';
+ el('visitCancel').hidden=!visit;
+ updateVisitOffsets(visit?.startsAt);
+ el('visitDialog').showModal();
+}
+async function renderApplicantVisits(item,id,body,context){if(!context.propertyId||!context.periodId)return;const section=node('section',undefined,'applicant-visits');section.append(node('h3','Visitas','detail-label'));const list=node('div',undefined,'visit-list');section.append(list);if(context.editable)section.append(actionButton('Programar visita','Programar visita',()=>openVisitDialog({...context,name:item.name,propertyTitle:property?.title||''})));
+ body.append(section);try{const result=await api(visitUrl(context.propertyId,context.periodId,item.applicant_id||id));if(currentDetail!==id||!el('detail').open)return;const visits=result.visits||[];if(!visits.length)list.append(node('p','Aún no hay visitas programadas.','integrity'));for(const visit of visits){const row=node('div',undefined,'visit-row');const description=node('div');description.append(node('strong',`${visitWhen(visit.startsAt,viewZone)} (${viewZone})`),node('span',visitStatus[visit.status]||visit.status,'visit-status'));row.append(description);if(context.editable&&visit.status!=='cancelled'&&visit.status!=='completed'){const actions=node('div');actions.append(actionButton('Editar',`Editar visita del ${visitWhen(visit.startsAt,viewZone)}`,()=>openVisitDialog({...context,name:item.name,propertyTitle:property?.title||''},visit)),actionButton('Realizada',`Marcar realizada la visita del ${visitWhen(visit.startsAt,viewZone)}`,async()=>{await api(`/api/visits/${encodeURIComponent(visit.id)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'completed'})});detail(id);toast('Visita marcada como realizada.');}));row.append(actions);}list.append(row);}}catch(e){list.append(node('p',e.message,'integrity'));}}
+el('visitForm').elements.startLocal.oninput=()=>updateVisitOffsets();
+el('visitTimezone').onchange=()=>{
+ const form=el('visitForm'),newZone=form.elements.timezone.value,oldZone=visitFormZone;
+ let instant=null;
+ try{
+  const candidates=localTimeCandidates(form.elements.startLocal.value,oldZone);
+  instant=candidates.find(item=>String(item.utcOffsetMinutes)===form.elements.utcOffsetMinutes.value)?.instant||
+    (candidates.length===1?candidates[0].instant:null);
+ }catch{}
+ visitFormZone=newZone;
+ if(instant)form.elements.startLocal.value=localVisitValue(instant,newZone);
+ else form.elements.startLocal.value='';
+ updateVisitOffsets(instant);
+ el('visitDialogContext').textContent=`${visitContext.name} · ${visitContext.propertyTitle} · ${newZone}`;
+ form.querySelector('.form-error').textContent=instant?'':'Elige una fecha y hora válida para esta zona.';
+};
+el('visitCancel').onclick=async()=>{if(!visitEditing)return;try{await api(`/api/visits/${encodeURIComponent(visitEditing.id)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'cancelled'})});el('visitDialog').close();if(currentDetail)detail(currentDetail);toast('Visita cancelada.');}catch(e){el('visitForm').querySelector('.form-error').textContent=e.message;}};
+async function saveVisitPayload(payload){
+ const url=visitEditing?`/api/visits/${encodeURIComponent(visitEditing.id)}`:
+  visitUrl(visitContext.propertyId,visitContext.periodId,visitContext.applicantId);
+ await api(url,{method:visitEditing?'PATCH':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+ el('visitDialog').close();
+ if(currentDetail)detail(currentDetail);
+ toast('Visita guardada.');
+}
+function showVisitConflict(error,payload){
+ if(!el('visitDialog').open||!visitFormStillMatches(payload))return;
+ const message=el('visitForm').querySelector('.form-error'),timezone=payload.timezone;
+ message.textContent=`${error.message}. ${error.conflicts.map(conflict=>`${conflict.propertyTitle} · ${visitWhen(conflict.startsAt,timezone)} (${timezone})`).join(' · ')}`;
+ const override=actionButton('Guardar de todos modos','Guardar de todos modos',async button=>{
+  button.disabled=true;
+  try{await saveVisitPayload({...payload,acknowledgeConflicts:error.conflictFingerprint});}
+  catch(retryError){
+   if(!el('visitDialog').open||!visitFormStillMatches(payload))return;
+   if(retryError.code==='VISIT_CONFLICT')showVisitConflict(retryError,payload);
+   else message.textContent=retryError.message;
+  }
+ });
+ message.append(document.createElement('br'),override);
+}
+function visitFormStillMatches(payload){
+ const fields=el('visitForm').elements;
+ return fields.startLocal.value===payload.startLocal&&fields.timezone.value===payload.timezone&&
+  Number(fields.durationMinutes.value)===payload.durationMinutes&&fields.status.value===payload.status&&
+  Number(fields.utcOffsetMinutes.value)===payload.utcOffsetMinutes;
+}
+function clearVisitConflict(event){
+ if(['startLocal','timezone','durationMinutes','status','utcOffsetMinutes'].includes(event.target.name))
+  el('visitForm').querySelector('.form-error').replaceChildren();
+}
+el('visitForm').addEventListener('input',clearVisitConflict);
+el('visitForm').addEventListener('change',clearVisitConflict);
+el('visitForm').onsubmit=async event=>{
+ event.preventDefault();if(!visitContext)return;
+ const form=event.currentTarget,button=el('visitSubmit'),message=form.querySelector('.form-error');
+ message.textContent='';
+ const timezone=form.elements.timezone.value,startLocal=form.elements.startLocal.value;
+ let candidates=[];try{candidates=localTimeCandidates(startLocal,timezone);}catch{}
+ if(!candidates.length){message.textContent='Esta fecha y hora no existe en la zona elegida.';return;}
+ const selected=candidates.length===1?candidates[0]:
+  candidates.find(candidate=>String(candidate.utcOffsetMinutes)===form.elements.utcOffsetMinutes.value);
+ if(!selected){message.textContent='Elige una de las dos ocurrencias de esta hora.';return;}
+ const payload={startLocal,timezone,utcOffsetMinutes:selected.utcOffsetMinutes,
+  durationMinutes:Number(form.elements.durationMinutes.value),status:form.elements.status.value};
+ button.disabled=true;
+ try{await saveVisitPayload(payload);}
+ catch(error){
+  if(error.code==='VISIT_CONFLICT'){
+   if(visitFormStillMatches(payload))showVisitConflict(error,payload);
+   else message.textContent='El formulario cambió. Vuelve a guardar para revisar el horario actual.';
+  }else message.textContent=error.message;
+ }
+ finally{button.disabled=false;}
+};
 function reviewClose(item){if(!periodsReady||!canEditPeriod())return;closingApplicant={id:item.applicant_id||item.conversation_id,name:item.name,propertyId:selectedPropertyId,periodId:selectedPeriodId};el('closePeriodReview').textContent=`Vas a elegir a ${item.name} para la búsqueda que comenzó el ${periodDate(activePeriod().rentalSince)}.`;el('closePeriodForm').querySelector('.form-error').textContent='';el('closePeriodDialog').showModal();}
 el('closePeriodForm').onsubmit=async event=>{event.preventDefault();const selected=closingApplicant,form=event.currentTarget,button=form.querySelector('.sync-button'),errorNode=form.querySelector('.form-error');if(!selected||selected.propertyId!==selectedPropertyId||selected.periodId!==selectedPeriodId||!canEditPeriod())return;button.disabled=true;errorNode.textContent='';try{const result=await api(`${periodBase()}/close`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chosenApplicantId:selected.id})});if(selected.propertyId!==selectedPropertyId||selected.periodId!==selectedPeriodId)return;const index=periods.findIndex(p=>p.id===result.period.id);if(index!==-1)periods[index]=result.period;el('closePeriodDialog').close();if(el('detail').open)el('detail').close();renderPeriod();renderItems();toast('Búsqueda cerrada. Se conserva en el histórico.');}catch(e){if(selected.propertyId===selectedPropertyId&&selected.periodId===selectedPeriodId)errorNode.textContent=e.message;}finally{button.disabled=false;}};
 function switchPeriod(id){if(!periods.some(p=>p.id===id))return;periodGeneration++;selectedPeriodId=id;requestId++;detailRequestId++;currentDetail=null;if(el('detail').open)el('detail').close();for(const dialogId of ['applicantDialog','periodDialog','closePeriodDialog'])if(el(dialogId).open)el(dialogId).close();datesInitialized=false;el('filters').reset();syncCompletedId=null;syncStatusUnavailable=false;syncModeReady=false;renderPeriod();load();refreshIncomeBounds();checkSync();}
@@ -223,4 +344,135 @@ el('deletePropertyForm').onsubmit=async event=>{event.preventDefault();const id=
 el('newPropertyForm').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget,data=new FormData(form),errorNode=form.querySelector('.form-error'),editing=propertyFormMode==='edit',propertyAtStart=selectedPropertyId,urlEditable=property?.canEditIdealistaUrl===true,previousUrl=property?.defaultIdealistaUrl??null,button=el('propertySubmit');errorNode.textContent='';const payload={title:data.get('title')};if(editing){payload.address=data.get('address')||null;if(urlEditable)payload.idealistaUrl=data.get('idealistaUrl')||null;if(!periodsReady){payload.rentalSince=data.get('rentalSince');payload.monthlyRentCents=data.get('monthlyRent')===''?null:Math.round(Number(data.get('monthlyRent'))*100);if(!urlEditable&&!property?.idealistaId&&data.get('idealistaUrl'))payload.idealistaUrl=data.get('idealistaUrl');}}else{payload.rentalSince=data.get('rentalSince');if(data.get('address'))payload.address=data.get('address');if(data.get('idealistaUrl'))payload.idealistaUrl=data.get('idealistaUrl');if(data.get('monthlyRent')!=='')payload.monthlyRentCents=Math.round(Number(data.get('monthlyRent'))*100);}button.disabled=true;try{const result=await api(editing?`/api/properties/${encodeURIComponent(propertyAtStart)}`:'/api/properties',{method:editing?'PATCH':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(editing&&propertyAtStart!==selectedPropertyId)return;form.reset();el('propertyDialog').close();if(editing){const index=properties.findIndex(p=>p.id===result.property.id);if(index!==-1)properties[index]=result.property;const option=[...el('propertySelect').options].find(o=>o.value===result.property.id);if(option)option.textContent=result.property.title;if(propertyAtStart===selectedPropertyId){await loadProperty();if(urlEditable&&previousUrl!==payload.idealistaUrl)await loadPeriods(selectedPeriodId);}}else if(isHome){location.assign(housingUrl(result.property.id));}else{properties.push(result.property);el('propertySelect').append(new Option(result.property.title,result.property.id));el('propertySelect').value=result.property.id;el('propertySelect').dispatchEvent(new Event('change'));}}catch(e){errorNode.textContent=e.message;}finally{button.disabled=false;}};
 el('addApplicant').onclick=()=>{if(canEditPeriod())el('applicantDialog').showModal();};
 el('newApplicantForm').onsubmit=async event=>{event.preventDefault();if(!canEditPeriod())return;const form=event.currentTarget,data=new FormData(form),errorNode=form.querySelector('.form-error'),propertyAtStart=selectedPropertyId,periodAtStart=selectedPeriodId,base=applicantBase(),button=form.querySelector('.sync-button');errorNode.textContent='';const tri=value=>value==='unknown'?null:value==='1';const payload={name:data.get('name'),hasChildren:tri(data.get('hasChildren')),hasPets:tri(data.get('hasPets')),incomeScope:data.get('incomeScope')==='unknown'?null:data.get('incomeScope')};for(const key of ['phone','email','notes'])if(data.get(key))payload[key]=data.get(key);if(data.get('peopleCount'))payload.peopleCount=Number(data.get('peopleCount'));if(data.get('monthlyIncome'))payload.monthlyIncomeCents=Math.round(Number(data.get('monthlyIncome'))*100);button.disabled=true;try{await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(propertyAtStart!==selectedPropertyId||periodAtStart!==selectedPeriodId)return;form.reset();el('applicantDialog').close();el('filters').reset();load();refreshIncomeBounds();}catch(e){if(propertyAtStart===selectedPropertyId&&periodAtStart===selectedPeriodId)errorNode.textContent=e.message;}finally{button.disabled=false;}};
-el('refresh').onclick=load;el('sync').onclick=()=>startSync();el('syncFull').onclick=()=>startSync('full');el('sync').disabled=true;el('syncFull').disabled=true;if(isHome){document.title='Mis viviendas · Morada';el('brandProperty').textContent='Mis viviendas';el('homeView').hidden=false;loadHomeProperties();}else{el('workspaceView').hidden=false;updateIncomeBounds();loadProperties().then(()=>{if(!multiHousingReady){loadProperty();load();refreshIncomeBounds();checkSync();}});}
+let calendarMonth=todayInZone(viewZone).slice(0,8)+'01',calendarDay=todayInZone(viewZone),calendarVisits=[],calendarRequest=0;
+const civilDate=(year,month,day)=>new Date(Date.UTC(year,month-1,day)).toISOString().slice(0,10);
+const civilParts=value=>value.split('-').map(Number);
+const monthBounds=value=>{const [year,month]=civilParts(value),end=new Date(Date.UTC(year,month,0)).getUTCDate();return {from:value.slice(0,8)+'01',to:civilDate(year,month,end)};};
+const civilMonthName=value=>new Intl.DateTimeFormat('es-ES',{timeZone:'UTC',month:'long',year:'numeric'}).format(new Date(value+'T12:00:00Z'));
+const civilDayName=value=>new Intl.DateTimeFormat('es-ES',{timeZone:'UTC',weekday:'long',day:'numeric',month:'long'}).format(new Date(value+'T12:00:00Z'));
+const dayBoundsCache=new Map();
+function dayBounds(day){
+ const key=viewZone+':'+day;
+ if(!dayBoundsCache.has(key))dayBoundsCache.set(key,civilDayBounds(day,viewZone));
+ return dayBoundsCache.get(key);
+}
+function calendarQuery(halo=0){
+ const bounds=monthBounds(calendarMonth);
+ return new URLSearchParams({from:addCivilDays(bounds.from,-halo),to:addCivilDays(bounds.to,halo),timezone:viewZone});
+}
+function calendarVisible(){
+ const propertyId=el('calendarProperty').value,statusValue=el('calendarStatus').value;
+ return calendarVisits.filter(visit=>(!propertyId||visit.propertyId===propertyId)&&(!statusValue||visit.status===statusValue));
+}
+function visitOnDay(visit,day){
+ const bounds=dayBounds(day);
+ return bounds.startsAt<bounds.endsAt&&visit.startsAt<bounds.endsAt&&visit.endsAt>bounds.startsAt;
+}
+function calendarConflict(visit){
+ if(!['pending_confirmation','confirmed'].includes(visit.status))return false;
+ const buffer=Number(el('calendarBuffer').value)||0,from=Date.parse(visit.startsAt),until=Date.parse(visit.endsAt);
+ return calendarVisits.some(other=>other.id!==visit.id&&['pending_confirmation','confirmed'].includes(other.status)&&
+  Date.parse(other.startsAt)<until+(other.propertyId===visit.propertyId?0:buffer)*60000&&
+  Date.parse(other.endsAt)>from-(other.propertyId===visit.propertyId?0:buffer)*60000);
+}
+function renderAgenda(){
+ const selected=calendarVisible().filter(visit=>visitOnDay(visit,calendarDay))
+  .sort((a,b)=>Date.parse(a.startsAt)-Date.parse(b.startsAt));
+ el('agendaTitle').textContent=`Agenda · ${civilDayName(calendarDay)} · ${viewZone}`;
+ const container=el('agendaItems');container.replaceChildren();
+ if(!selected.length){container.append(node('p','No hay visitas este día.','integrity'));return;}
+ const clockFormat=new Intl.DateTimeFormat('es-ES',{timeZone:viewZone,hour:'2-digit',minute:'2-digit'});
+ const dateFormat=new Intl.DateTimeFormat('es-ES',{timeZone:viewZone,day:'numeric',month:'short'});
+ for(const visit of selected){
+  const startsDay=localDateTimeParts(visit.startsAt,viewZone).date,clock=clockFormat.format(new Date(visit.startsAt));
+  const timeText=startsDay===calendarDay?clock:`${dateFormat.format(new Date(visit.startsAt))} · ${clock} (en curso)`;
+  const card=node('article',undefined,`agenda-visit${calendarConflict(visit)?' has-conflict':''}`);
+  const name=node('a',visit.applicantName);
+  name.href=`/?${new URLSearchParams({propertyId:visit.propertyId,periodId:visit.periodId,applicantId:visit.applicantId})}`;
+  card.append(node('p',timeText,'agenda-time'),node('h3',visit.propertyTitle),name,
+   node('p',visitStatus[visit.status]||visit.status,'visit-status'));
+  if(calendarConflict(visit))card.append(node('p','Coincide con otra visita','conflict-note'));
+  const exportLink=node('a','Descargar .ics','visit-export');
+  exportLink.href=`/api/visits/${encodeURIComponent(visit.id)}.ics`;exportLink.download='visita.ics';
+  card.append(exportLink);container.append(card);
+ }
+}
+function renderCalendar(){
+ const visible=calendarVisible(),bounds=monthBounds(calendarMonth),[year,month]=civilParts(calendarMonth);
+ const monthEnd=new Date(Date.UTC(year,month,0)).getUTCDate();
+ const leading=(new Date(Date.UTC(year,month-1,1)).getUTCDay()+6)%7,days=el('calendarDays');
+ el('calendarMonth').textContent=civilMonthName(calendarMonth);days.replaceChildren();
+ for(let i=0;i<leading;i++)days.append(node('div',undefined,'calendar-day muted-day'));
+ const clock=new Intl.DateTimeFormat('es-ES',{timeZone:viewZone,hour:'2-digit',minute:'2-digit'});
+ for(let number=1;number<=monthEnd;number++){
+  const value=civilDate(year,month,number),button=node('button',undefined,
+   `calendar-day${value===calendarDay?' selected':''}`);
+  button.type='button';button.setAttribute('aria-label',`${number} de ${el('calendarMonth').textContent}`);
+  button.append(node('span',String(number),'calendar-date'));
+  const events=visible.filter(visit=>visitOnDay(visit,value));
+  for(const visit of events.slice(0,3)){
+   const tag=node('span',`${clock.format(new Date(visit.startsAt))} ${visit.propertyTitle}`,'calendar-event');
+   if(calendarConflict(visit))tag.classList.add('has-conflict');
+   button.append(tag);
+  }
+  if(events.length>3)button.append(node('span',`+${events.length-3} más`,'calendar-more'));
+  button.onclick=()=>{calendarDay=value;renderCalendar();};days.append(button);
+ }
+ const exportQuery=calendarQuery();
+ if(el('calendarProperty').value)exportQuery.set('propertyId',el('calendarProperty').value);
+ if(el('calendarStatus').value)exportQuery.set('status',el('calendarStatus').value);
+ el('calendarExport').href=`/api/visits.ics?${exportQuery}`;
+ el('calendarExport').download=`visitas-${bounds.from}-${bounds.to}.ics`;
+ renderAgenda();
+}
+async function loadCalendar(){
+ const request=++calendarRequest,query=calendarQuery(1);
+ el('calendarError').hidden=true;
+ try{
+  const result=await api(`/api/visits?${query}`);
+  if(request!==calendarRequest)return;
+  calendarVisits=result.visits||[];dayBoundsCache.clear();renderCalendar();
+ }catch(error){
+  if(request!==calendarRequest)return;
+  el('calendarError').textContent=error.message;el('calendarError').hidden=false;
+ }
+}
+function moveCalendarMonth(amount){
+ const [year,month]=civilParts(calendarMonth),next=new Date(Date.UTC(year,month-1+amount,1));
+ calendarMonth=civilDate(next.getUTCFullYear(),next.getUTCMonth()+1,1);
+ calendarDay=monthBounds(calendarMonth).from;loadCalendar();
+}
+async function initCalendar(){
+ document.title='Calendario de visitas · Morada';el('calendarView').hidden=false;
+ zoneOptions(el('calendarTimezone'),viewZone);
+ el('calendarTimezone').onchange=()=>{
+ viewZone=el('calendarTimezone').value;
+ try{localStorage.setItem('calendarTimezone',viewZone);}catch{}
+  dayBoundsCache.clear();renderCalendar();loadCalendar();
+ };
+ try{
+  const result=await api('/api/properties');
+  el('calendarProperty').append(...(result.properties||[]).map(item=>new Option(item.title,item.id)));
+ }catch{}
+ for(const id of ['calendarProperty','calendarStatus'])el(id).onchange=renderCalendar;
+ el('calendarBuffer').onchange=async()=>{
+  try{
+   const settings=await api('/api/calendar/settings',{method:'PATCH',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({travelBufferMinutes:Number(el('calendarBuffer').value)})});
+   el('calendarBuffer').value=String(settings.travelBufferMinutes);
+  }catch(error){el('calendarError').textContent=error.message;el('calendarError').hidden=false;}
+  renderCalendar();
+ };
+ try{
+  const settings=await api('/api/calendar/settings');
+  el('calendarBuffer').value=String(settings.travelBufferMinutes);
+ }catch{}
+ el('calendarPrevious').onclick=()=>moveCalendarMonth(-1);
+ el('calendarNext').onclick=()=>moveCalendarMonth(1);
+ el('calendarToday').onclick=()=>{
+  calendarMonth=todayInZone(viewZone).slice(0,8)+'01';
+  calendarDay=todayInZone(viewZone);loadCalendar();
+ };
+ loadCalendar();
+}
+el('refresh').onclick=load;el('sync').onclick=()=>startSync();el('syncFull').onclick=()=>startSync('full');el('sync').disabled=true;el('syncFull').disabled=true;if(isCalendar){initCalendar();}else if(isHome){document.title='Mis viviendas · Morada';el('brandProperty').textContent='Mis viviendas';el('homeView').hidden=false;loadHomeProperties();}else{el('workspaceView').hidden=false;updateIncomeBounds();loadProperties().then(()=>{if(!multiHousingReady){loadProperty();load();refreshIncomeBounds();checkSync();}});}

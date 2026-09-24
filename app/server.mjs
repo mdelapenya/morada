@@ -7,6 +7,9 @@ import { getPeriod, getOpenPeriod, listPeriods, createPeriod, updatePeriod, clos
 import { deleteProperty, restoreProperty, purgeProperty } from './database.mjs';
 import { getLastSuccessfulSync, markSyncAttentionRead } from './database.mjs';
 import { createSyncController, madridToday } from './sync.mjs';
+import { createVisit, updateVisit, getVisit, listVisits, listApplicantVisits,
+  getCalendarSettings, updateCalendarSettings } from './visits.mjs';
+import { generateVisitCalendar } from './visit-calendar.mjs';
 
 async function readJsonBody(req, allowedHosts, limit = 64 * 1024) {
   if (req.headers.origin && !allowedHosts.map(h=>`http://${h}`).includes(req.headers.origin))
@@ -48,8 +51,8 @@ function syncMode(payload) {
 export function createServer(db, options = {}) {
   const sync = createSyncController(db, options);
   const server = http.createServer(async (req, res) => {
-    const send = (status, value, type='application/json; charset=utf-8') => {
-      res.writeHead(status, {'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',
+    const send = (status, value, type='application/json; charset=utf-8', extra={}) => {
+      res.writeHead(status, {'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...extra,
         'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'"});
       res.end(type.startsWith('application/json') ? JSON.stringify(value) : value);
     };
@@ -58,6 +61,44 @@ export function createServer(db, options = {}) {
       const allowedHosts = [`127.0.0.1:${req.socket.localPort}`, `localhost:${req.socket.localPort}`];
       if (!allowedHosts.includes(host)) return send(403,{error:'Acceso local requerido'});
       const url = new URL(req.url, `http://${host}`);
+      const visitError=error=>send(error.status||400,{error:error.message,
+        ...(error.code?{code:error.code}:{}),
+        ...(error.conflicts?{conflicts:error.conflicts,conflictFingerprint:error.conflictFingerprint}:{})});
+      const scopedVisits=url.pathname.match(/^\/api\/properties\/([^/]+)\/periods\/([^/]+)\/applicants\/([^/]+)\/visits$/);
+      if(scopedVisits && ['GET','POST'].includes(req.method)) {
+        const [propertyId,periodId,applicantId]=scopedVisits.slice(1).map(decodeURIComponent);
+        try {
+          if(req.method==='GET') return send(200,{visits:listApplicantVisits(db,propertyId,periodId,applicantId)});
+          return send(201,createVisit(db,propertyId,periodId,applicantId,
+            await readJsonBody(req,allowedHosts)));
+        } catch(error) { return visitError(error); }
+      }
+      if(url.pathname==='/api/calendar/settings' && ['GET','PATCH'].includes(req.method)) {
+        try { return send(200,req.method==='GET'?getCalendarSettings(db):
+          updateCalendarSettings(db,await readJsonBody(req,allowedHosts,1024))); }
+        catch(error) { return visitError(error); }
+      }
+      if(url.pathname==='/api/visits' && req.method==='GET') {
+        try { return send(200,{visits:listVisits(db,url.searchParams)}); }
+        catch(error) { return visitError(error); }
+      }
+      if(url.pathname==='/api/visits.ics' && req.method==='GET') {
+        try { return send(200,generateVisitCalendar(listVisits(db,url.searchParams)),
+          'text/calendar; charset=utf-8',{'Content-Disposition':'attachment; filename="visitas.ics"'}); }
+        catch(error) { return visitError(error); }
+      }
+      const visitPath=url.pathname.match(/^\/api\/visits\/([^/]+?)(\.ics)?$/);
+      if(visitPath && ['GET','PATCH'].includes(req.method)) {
+        const visitId=decodeURIComponent(visitPath[1]);
+        if(visitPath[2] && req.method!=='GET') return send(404,{error:'No encontrado'});
+        try {
+          const item=req.method==='PATCH'?updateVisit(db,visitId,await readJsonBody(req,allowedHosts)):getVisit(db,visitId);
+          if(!item) return send(404,{error:'Visita no encontrada'});
+          if(visitPath[2]) return send(200,generateVisitCalendar([item]),
+            'text/calendar; charset=utf-8',{'Content-Disposition':'attachment; filename="visita.ics"'});
+          return send(200,item);
+        } catch(error) { return visitError(error); }
+      }
       const periodPath = url.pathname.match(/^\/api\/properties\/([^/]+)\/periods(?:\/([^/]+))?(?:\/(applicants|sync))?(?:\/([^/]+))?$/);
       if (periodPath) {
         const propertyId = decodeURIComponent(periodPath[1]);
@@ -159,7 +200,8 @@ export function createServer(db, options = {}) {
         try { const payload=await readJsonBody(req,allowedHosts,1024);
           if (Object.keys(payload).length!==1) return send(400,{error:'Petición no válida'});
           return send(200,{period:closePeriod(db,propertyId,periodId,payload.chosenApplicantId)});
-        } catch(error) { return send(error.code==='PERIOD_CLOSED'?409:error.status||400,{error:error.message}); }
+        } catch(error) { return send(['PERIOD_CLOSED','UPCOMING_VISITS'].includes(error.code)?409:error.status||400,
+          {error:error.message,...(error.code?{code:error.code}:{})}); }
       }
       if (url.pathname === '/api/properties') {
         if (req.method === 'GET') {
@@ -339,7 +381,8 @@ export function createServer(db, options = {}) {
           return send(updated ? 200 : 404, updated ? {ok:true,...changes} : {error:'Interesado no encontrado'});
         } catch { return send(400,{error:'Cambios no válidos'}); }
       }
-      const assets = {'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],
+      const assets = {'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],
+        '/visit-time.mjs':['visit-time.mjs','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],
         '/morada-mark.svg':['morada-mark.svg','image/svg+xml; charset=utf-8'],'/morada-logo.svg':['morada-logo.svg','image/svg+xml; charset=utf-8']};
       if (req.method === 'GET' && assets[url.pathname]) {
         const [file,type] = assets[url.pathname];

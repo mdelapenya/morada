@@ -46,7 +46,8 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const address = server.address();
 const baseUrl = `http://127.0.0.1:${address.port}`;
 const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage({ viewport: { width: 1440, height: 980 } });
+const mainContext = await browser.newContext({ viewport: { width: 1440, height: 980 }, timezoneId:'Europe/Madrid' });
+const page = await mainContext.newPage();
 const pageErrors = [];
 page.on('pageerror', error => pageErrors.push(error.message));
 const legacyPeriodRoute = url => /\/api\/properties\/[^/]+\/periods$/.test(new URL(url).pathname);
@@ -637,12 +638,232 @@ try {
   assert.equal(new URL(page.url()).searchParams.has('sort'),false,'old count-sort bookmark falls back to default sorting');
   assert.equal(await page.locator('#sortSummary').innerText(),'Actividad más reciente primero');
   assert.equal(await page.locator('#newPeriod').isVisible(),false,'cannot open a second search while one is open');
+  const desktopToolbar=await page.evaluate(()=>{
+    const link=document.getElementById('workspaceCalendar'),peer=document.getElementById('editProperty');
+    const a=getComputedStyle(link),b=getComputedStyle(peer);
+    const management=document.querySelector('.toolbar-management').getBoundingClientRect();
+    const sync=document.querySelector('.toolbar-sync').getBoundingClientRect();
+    return {fontSize:a.fontSize,peerFontSize:b.fontSize,height:link.getBoundingClientRect().height,
+      peerHeight:peer.getBoundingClientRect().height,borderRadius:a.borderRadius,peerBorderRadius:b.borderRadius,
+      decoration:a.textDecorationLine,gap:sync.left-management.right};
+  });
+  assert.equal(desktopToolbar.fontSize,desktopToolbar.peerFontSize,'Calendario uses the same button typography');
+  assert.equal(desktopToolbar.height,desktopToolbar.peerHeight,'Calendario matches peer button height');
+  assert.equal(desktopToolbar.borderRadius,desktopToolbar.peerBorderRadius,'Calendario matches peer button shape');
+  assert.equal(desktopToolbar.decoration,'none','Calendario link has button styling');
+  assert.ok(desktopToolbar.gap>=20,'management and synchronization have desktop breathing room');
+  await page.setViewportSize({width:390,height:844});
+  const originalTitle=await page.locator('#propertyTitle').innerText();
+  await page.locator('#propertyTitle').evaluate(node=>node.textContent='Vivienda sintética con un nombre extraordinariamente largo para comprobar la barra');
+  const mobileToolbar=await page.evaluate(()=>{
+    const management=document.querySelector('.toolbar-management').getBoundingClientRect();
+    const sync=document.querySelector('.toolbar-sync').getBoundingClientRect();
+    return {width:document.documentElement.scrollWidth,viewport:window.innerWidth,verticalGap:sync.top-management.bottom};
+  });
+  assert.ok(mobileToolbar.width<=mobileToolbar.viewport,'long synthetic title and toolbar fit at 390px');
+  assert.ok(mobileToolbar.verticalGap>=12,'mobile action groups have spacing');
+  await page.locator('#propertyTitle').evaluate((node,title)=>node.textContent=title,originalTitle);
+  await page.setViewportSize({width:1440,height:980});
   await page.getByRole('button',{name:'Editar vivienda'}).click();
   assert.equal(await page.locator('#newPropertyForm [name="monthlyRent"]').isVisible(),false,'housing edit contains stable fields only');
   await page.getByRole('button',{name:'Cerrar vivienda'}).click();
   await page.getByRole('button',{name:'Editar búsqueda'}).click();
   assert.equal(await page.locator('#periodForm [name="monthlyRent"]').inputValue(),'825');
   await page.locator('#periodForm [data-close]').click();
+  await page.getByRole('button',{name:'Ver ficha de Alba'}).click();
+  await page.getByRole('button',{name:'Programar visita'}).click();
+  const visitForm=page.locator('#visitForm');
+  await visitForm.locator('[name="startLocal"]').fill('2026-10-15T10:00');
+  await visitForm.locator('[name="durationMinutes"]').selectOption('30');
+  await visitForm.locator('[name="status"]').selectOption('confirmed');
+  await page.getByRole('button',{name:'Guardar visita'}).click();
+  await page.locator('#visitDialog').waitFor({state:'hidden'});
+  await page.locator('#detailBody').getByText(/15 oct.*10:00/i).waitFor();
+  await page.getByRole('button',{name:'Programar visita'}).click();
+  await visitForm.locator('[name="startLocal"]').fill('2026-10-25T02:30');
+  await visitForm.locator('[name="utcOffsetMinutes"]').selectOption('60');
+  await page.getByRole('button',{name:'Guardar visita'}).click();
+  await page.locator('#visitDialog').waitFor({state:'hidden'});
+  await page.getByRole('button',{name:/Editar visita del/i}).last().click();
+  assert.equal(await visitForm.locator('[name="utcOffsetMinutes"]').inputValue(),'60','editing preserves the second occurrence of a repeated Madrid hour');
+  await page.getByRole('button',{name:'Guardar visita'}).click();
+  await page.locator('#visitDialog').waitFor({state:'hidden'});
+  const repeatedVisit=await page.evaluate(async ({propertyId,periodId})=>{
+    const person=await fetch(`/api/properties/${propertyId}/periods/${periodId}/applicants?status=all`).then(response=>response.json());
+    const id=person.items.find(item=>item.name==='Alba').applicant_id;
+    const result=await fetch(`/api/properties/${propertyId}/periods/${periodId}/applicants/${encodeURIComponent(id)}/visits`).then(response=>response.json());
+    return result.visits.find(visit=>visit.startsAt==='2026-10-25T01:30:00.000Z');
+  },{propertyId:originalPropertyId,periodId:originalPeriodId});
+  assert.ok(repeatedVisit,'saving the second repeated occurrence keeps its UTC instant');
+  const albaApplicantId=await page.evaluate(async ({propertyId,periodId})=>{const result=await fetch(`/api/properties/${propertyId}/periods/${periodId}/applicants?status=all`).then(response=>response.json());return result.items.find(item=>item.name==='Alba').applicant_id;},{propertyId:originalPropertyId,periodId:originalPeriodId});
+  const crossMidnight=await page.request.post(`${baseUrl}/api/properties/${originalPropertyId}/periods/${originalPeriodId}/applicants/${encodeURIComponent(albaApplicantId)}/visits`,{data:{startLocal:'2026-09-30T23:45',durationMinutes:120,status:'confirmed'}});
+  assert.equal(crossMidnight.status(),201,'synthetic cross-midnight visit is created for calendar rendering');
+  await page.getByRole('button',{name:'Cerrar detalle'}).click();
+  await page.locator('#propertySelect').selectOption(olivarId);await count(1);
+  await page.getByRole('button',{name:'Ver ficha de Luisa Manual'}).click();
+  await page.getByRole('button',{name:'Programar visita'}).click();
+  await visitForm.locator('[name="startLocal"]').fill('2026-10-15T10:20');
+  await page.getByRole('button',{name:'Guardar visita'}).click();
+  await visitForm.getByText('La visita coincide con otra cita').waitFor();
+  assert.match(await visitForm.innerText(),/Piso de prueba/,'the conflict names the other property even while viewing Olivar');
+  await visitForm.locator('[name="startLocal"]').fill('2026-10-15T11:00');
+  assert.equal(await page.getByRole('button',{name:'Guardar de todos modos'}).count(),0,
+    'editing the time clears the stale conflict acknowledgement');
+  await page.getByRole('button',{name:'Guardar visita'}).click();
+  await page.locator('#visitDialog').waitFor({state:'hidden'});
+  const safeVisitList=await page.request.get(`${baseUrl}/api/visits?from=2026-10-15&to=2026-10-15&propertyId=${olivarId}`).then(response=>response.json());
+  assert.equal(safeVisitList.visits.length,1);
+  assert.equal(safeVisitList.visits[0].startsAt,'2026-10-15T09:00:00.000Z',
+    'the revised 11:00 time was saved rather than the stale conflicting 10:20 time');
+  const visitPatchPath=`/api/visits/${safeVisitList.visits[0].id}`;
+  const delayedConflictMatch=url=>new URL(url).pathname===visitPatchPath;
+  let releaseDelayedConflict;
+  const delayedConflictRoute=async route=>{
+    if(!route.request().postDataJSON()?.acknowledgeConflicts)return route.continue();
+    await new Promise(resolve=>{releaseDelayedConflict=resolve;});
+    return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({
+      error:'La visita coincide con otra cita',code:'VISIT_CONFLICT',
+      conflicts:[{propertyTitle:'Piso de prueba',startsAt:'2026-10-15T08:00:00.000Z'}],
+      conflictFingerprint:`sha256${'a'.repeat(64)}`})});
+  };
+  await page.route(delayedConflictMatch,delayedConflictRoute);
+  await page.getByRole('button',{name:/Editar visita del/i}).click();
+  await visitForm.locator('[name="startLocal"]').fill('2026-10-15T10:20');
+  await page.getByRole('button',{name:'Guardar visita'}).click();
+  await visitForm.getByText('La visita coincide con otra cita').waitFor();
+  const retryRequest=page.waitForRequest(request=>new URL(request.url()).pathname===visitPatchPath&&
+    Boolean(request.postDataJSON()?.acknowledgeConflicts));
+  await page.getByRole('button',{name:'Guardar de todos modos'}).click();
+  await retryRequest;
+  const delayedResponse=page.waitForResponse(response=>new URL(response.url()).pathname===visitPatchPath&&
+    response.status()===409);
+  try{
+    await visitForm.locator('[name="startLocal"]').fill('2026-10-15T11:30');
+    assert.equal(await page.getByRole('button',{name:'Guardar de todos modos'}).count(),0,
+      'editing while an override is pending clears its old acknowledgement');
+  }finally{releaseDelayedConflict();}
+  await delayedResponse;
+  await page.waitForTimeout(50);
+  assert.equal(await page.getByRole('button',{name:'Guardar de todos modos'}).count(),0,
+    'a late second conflict does not restore the obsolete acknowledgement');
+  await page.unroute(delayedConflictMatch,delayedConflictRoute);
+  await page.getByRole('button',{name:'Guardar visita'}).click();
+  await page.locator('#visitDialog').waitFor({state:'hidden'});
+  const afterDelayedConflict=await page.request.get(`${baseUrl}/api/visits/${safeVisitList.visits[0].id}`).then(response=>response.json());
+  assert.equal(afterDelayedConflict.startsAt,'2026-10-15T09:30:00.000Z',
+    'saving after a late conflict uses the new visible time');
+  await page.getByRole('button',{name:/Editar visita del/i}).click();
+  await visitForm.locator('[name="startLocal"]').fill('2026-10-15T10:20');
+  await page.getByRole('button',{name:'Guardar visita'}).click();
+  await visitForm.getByText('La visita coincide con otra cita').waitFor();
+  await page.getByRole('button',{name:'Guardar de todos modos'}).click();
+  await page.locator('#visitDialog').waitFor({state:'hidden'});
+  await page.locator('#detailBody').getByText(/15 oct.*10:20/i).waitFor();
+  await page.getByRole('button',{name:'Cerrar detalle'}).click();
+  await page.goto(`${baseUrl}/?view=calendar`,{waitUntil:'networkidle'});
+  await page.getByRole('heading',{name:'Calendario de visitas'}).waitFor();
+  for(const width of [900,1024]){
+    await page.setViewportSize({width,height:844});
+    const geometry=await page.evaluate(()=>({pageWidth:document.documentElement.scrollWidth,
+      viewport:window.innerWidth,filtersRight:document.querySelector('.calendar-filters').getBoundingClientRect().right}));
+    assert.ok(geometry.pageWidth<=geometry.viewport&&geometry.filtersRight<=geometry.viewport,
+      `calendar controls fit at ${width}px`);
+  }
+  await page.setViewportSize({width:1440,height:980});
+  await page.getByRole('button',{name:'Mes siguiente'}).click();
+  await page.locator('#agendaItems').getByText('Alba').waitFor();
+  assert.ok(await page.locator('#calendarDays .calendar-event').count()>0,'a visit beginning in the halo appears on its overlapping October day');
+  assert.match(await page.locator('#agendaItems').innerText(),/30 sept.*23:45.*en curso/i,'an overnight visit identifies its prior-day start in the next-day agenda');
+  await page.getByRole('button',{name:/15 de octubre de 2026/}).click();
+  await page.locator('#calendarProperty').selectOption(originalPropertyId);
+  await page.locator('#agendaItems').getByText('Alba').waitFor();
+  assert.equal(await page.locator('#agendaItems').getByText('Luisa Manual').count(),0,'property filter hides the other visit from the agenda');
+  assert.ok(await page.locator('.has-conflict').count()>0,'the filtered calendar keeps the cross-property conflict indicator');
+  const rangeIcs=await page.request.get(new URL(await page.locator('#calendarExport').getAttribute('href'),baseUrl).href);
+  assert.equal(rangeIcs.status(),200);
+  assert.match(rangeIcs.headers()['content-disposition'],/attachment/);
+  assert.doesNotMatch(await rangeIcs.text(),/Alba|Luisa|600123456/,'ICS export omits contact data');
+  const individualHref=await page.locator('#agendaItems .visit-export').getAttribute('href');
+  const individualIcs=await page.request.get(new URL(individualHref,baseUrl).href);
+  assert.equal(individualIcs.status(),200,'individual ICS is downloadable');
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'calendar fits at 390px');
+  await page.setViewportSize({width:1440,height:980});
+  const tokyoContext=await browser.newContext({viewport:{width:390,height:844},timezoneId:'Asia/Tokyo'});
+  const tokyoPage=await tokyoContext.newPage();
+  await tokyoPage.goto(`${baseUrl}/?view=calendar`,{waitUntil:'networkidle'});
+  await tokyoPage.locator('#calendarTimezone').selectOption('Europe/Madrid');
+  await tokyoPage.getByRole('button',{name:'Mes siguiente'}).click();
+  await tokyoPage.getByRole('heading',{name:'octubre de 2026'}).waitFor();
+  assert.equal(await tokyoPage.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'calendar fits after explicitly choosing Madrid outside the browser zone');
+  await tokyoContext.close();
+  const newYorkContext=await browser.newContext({viewport:{width:390,height:844},timezoneId:'America/New_York'});
+  const newYorkPage=await newYorkContext.newPage();
+  await newYorkPage.goto(`${baseUrl}/?view=calendar`,{waitUntil:'networkidle'});
+  assert.equal(await newYorkPage.locator('#calendarTimezone').inputValue(),'America/New_York','calendar defaults to the browser zone');
+  await newYorkPage.goto(`${baseUrl}/?propertyId=${originalPropertyId}`,{waitUntil:'networkidle'});
+  await newYorkPage.getByRole('button',{name:'Ver ficha de Alba'}).click();
+  await newYorkPage.getByRole('button',{name:'Programar visita'}).click();
+  assert.equal(await newYorkPage.locator('#visitTimezone').inputValue(),'America/New_York','a new visit defaults to the browser zone');
+  await newYorkPage.locator('#visitTimezone').selectOption('Asia/Katmandu');
+  await newYorkPage.locator('#visitForm [name="startLocal"]').fill('2026-10-20T10:00');
+  await newYorkPage.getByRole('button',{name:'Guardar visita'}).click();
+  await newYorkPage.locator('#visitDialog').waitFor({state:'hidden'});
+  const kathmanduVisit=await newYorkPage.evaluate(async ({propertyId,periodId,applicantId})=>{
+    const result=await fetch(`/api/properties/${propertyId}/periods/${periodId}/applicants/${encodeURIComponent(applicantId)}/visits`).then(response=>response.json());
+    return result.visits.find(visit=>visit.timezone==='Asia/Katmandu');
+  },{propertyId:originalPropertyId,periodId:originalPeriodId,applicantId:albaApplicantId});
+  assert.equal(kathmanduVisit.startsAt,'2026-10-20T04:15:00.000Z','the non-hour zone keeps its exact UTC offset');
+  await newYorkPage.goto(`${baseUrl}/?view=calendar`,{waitUntil:'networkidle'});
+  await newYorkPage.getByRole('button',{name:'Mes siguiente'}).click();
+  await newYorkPage.getByRole('button',{name:/15 de octubre de 2026/}).click();
+  await newYorkPage.locator('#agendaItems').getByText('Alba').waitFor();
+  assert.match(await newYorkPage.locator('#agendaItems').innerText(),/04:00/,'the same UTC appointment is displayed in New York time');
+  await newYorkPage.locator('#calendarTimezone').selectOption('Europe/Madrid');
+  assert.match(await newYorkPage.locator('#agendaItems').innerText(),/10:00/,'changing calendar zone changes only the view of the UTC appointment');
+  assert.match(await newYorkPage.locator('#calendarExport').getAttribute('href'),/timezone=Europe%2FMadrid/);
+  await newYorkPage.goto(`${baseUrl}/?propertyId=${originalPropertyId}`,{waitUntil:'networkidle'});
+  await newYorkPage.getByRole('button',{name:'Ver ficha de Alba'}).click();
+  await newYorkPage.getByRole('button',{name:'Programar visita'}).click();
+  assert.equal(await newYorkPage.locator('#visitTimezone').inputValue(),'Europe/Madrid','an explicit view-zone choice persists for new visits');
+  await newYorkPage.locator('#visitDialog [data-close]').click();
+  await newYorkPage.getByRole('button',{name:/Editar visita del/i}).first().click();
+  assert.equal(await newYorkPage.locator('#visitTimezone').inputValue(),'Europe/Madrid','editing keeps the stored visit zone');
+  const originalVisit=await newYorkPage.evaluate(async ({propertyId,periodId,applicantId})=>{
+    const result=await fetch(`/api/properties/${propertyId}/periods/${periodId}/applicants/${encodeURIComponent(applicantId)}/visits`).then(response=>response.json());
+    return result.visits[0];
+  },{propertyId:originalPropertyId,periodId:originalPeriodId,applicantId:albaApplicantId});
+  await newYorkPage.locator('#visitTimezone').selectOption('America/New_York');
+  const convertedLocal=await newYorkPage.locator('#visitForm [name="startLocal"]').inputValue();
+  const expectedLocal=new Intl.DateTimeFormat('sv-SE',{timeZone:'America/New_York',year:'numeric',month:'2-digit',
+    day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(originalVisit.startsAt)).replace(' ','T');
+  assert.equal(convertedLocal,expectedLocal,'changing the form zone preserves the selected instant');
+  await newYorkPage.getByRole('button',{name:'Guardar visita'}).click();
+  await newYorkPage.locator('#visitDialog').waitFor({state:'hidden'});
+  const convertedVisit=await newYorkPage.request.get(`${baseUrl}/api/visits/${originalVisit.id}`).then(response=>response.json());
+  assert.equal(convertedVisit.startsAt,originalVisit.startsAt,'saving a zone-only edit preserves UTC');
+  assert.equal(convertedVisit.timezone,'America/New_York','the selected event zone is saved');
+  await newYorkContext.close();
+  await page.goto(`${baseUrl}/?propertyId=${olivarId}`,{waitUntil:'networkidle'});await count(1);
+  await page.getByRole('button',{name:'Ver ficha de Luisa Manual'}).click();
+  await page.getByRole('button',{name:/Editar visita del/i}).click();
+  await visitForm.locator('[name="startLocal"]').fill('2026-10-15T11:00');
+  await page.getByRole('button',{name:'Guardar visita'}).click();
+  await page.locator('#visitDialog').waitFor({state:'hidden'});
+  await page.getByRole('button',{name:/Marcar realizada la visita del/i}).click();
+  await page.locator('#detailBody').getByText('Realizada').waitFor();
+  await page.getByRole('button',{name:'Programar visita'}).click();
+  await visitForm.locator('[name="startLocal"]').fill('2026-10-16T10:00');
+  await page.getByRole('button',{name:'Guardar visita'}).click();
+  await page.locator('#visitDialog').waitFor({state:'hidden'});
+  await page.getByRole('button',{name:/Editar visita del/i}).last().click();
+  await page.getByRole('button',{name:'Cancelar visita'}).click();
+  await page.locator('#visitDialog').waitFor({state:'hidden'});
+  await page.locator('#detailBody').getByText('Cancelada').waitFor();
+  await page.getByRole('button',{name:'Cerrar detalle'}).click();
+  await page.locator('#propertySelect').selectOption(originalPropertyId);await count(8);
+  const completeOriginalVisits=await page.evaluate(async ({propertyId,periodId,applicantId})=>{const base=`/api/properties/${propertyId}/periods/${periodId}/applicants/${encodeURIComponent(applicantId)}/visits`;const visits=(await fetch(base).then(response=>response.json())).visits;return Promise.all(visits.filter(visit=>['pending_confirmation','confirmed'].includes(visit.status)).map(visit=>fetch(`/api/visits/${encodeURIComponent(visit.id)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'completed'})}).then(response=>response.status)));},{propertyId:originalPropertyId,periodId:originalPeriodId,applicantId:albaApplicantId});
+  assert.ok(completeOriginalVisits.every(status=>status===200),'synthetic future visits are completed before closing the historical period');
   const invalidClose=await page.evaluate(async ({propertyId,periodId})=>{const response=await fetch(`/api/properties/${propertyId}/periods/${periodId}/close`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chosenApplicantId:'manual:not-a-real-person'})});return response.status;},{propertyId:originalPropertyId,periodId:originalPeriodId});
   assert.equal(invalidClose,400,'cannot close by choosing an applicant outside the search');
   await page.getByRole('button',{name:'Ver ficha de Alba'}).click();
@@ -667,11 +888,13 @@ try {
   assert.match(await page.locator('#detailBody').innerText(),/Nota histórica conservada/);
   assert.equal(await page.locator('#detailNotes').count(),0);
   assert.equal(await page.getByRole('button',{name:'Guardar notas'}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'Programar visita'}).count(),0,'closed periods do not allow new visits');
+  assert.equal(await page.getByRole('button',{name:/Editar visita del/i}).count(),0,'closed periods do not allow visit edits');
   await page.getByRole('button',{name:'Cerrar detalle'}).click();
   await page.getByRole('button',{name:'Nueva búsqueda'}).click();
   assert.equal(await page.locator('#periodForm [name="monthlyRent"]').inputValue(),'825');
   assert.match(await page.locator('#periodForm [name="idealistaUrl"]').inputValue(),/13579135/);
-  assert.equal(await page.locator('#periodForm [name="rentalSince"]').inputValue(),'2026-09-24');
+  assert.equal(await page.locator('#periodForm [name="rentalSince"]').inputValue(),new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()));
   await page.locator('#periodForm [name="monthlyRent"]').fill('875');
   await page.getByRole('button',{name:'Crear búsqueda'}).click();
   await page.locator('#periodDialog').waitFor({state:'hidden'});
@@ -681,20 +904,21 @@ try {
   assert.equal(new URL(page.url()).searchParams.get('periodId'),newPeriodId);
   assert.match(await page.locator('#periodSummary').innerText(),/Búsqueda activa.*875,00/);
   assert.equal(await page.locator('#sync').isDisabled(),false,'reused listing is available for the new search');
+  const todayMadrid=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   const reusedChat=fixture('101','Alba',['1 persona'],{message:'Conversación nueva de septiembre'});
-  reusedChat.activityDate='2026-09-24';
-  reusedChat.messages[0].messageDate='2026-09-24';
+  reusedChat.activityDate=todayMadrid;
+  reusedChat.messages[0].messageDate=todayMadrid;
   reusedChat.messages[0].text=reusedChat.messages[0].rawText;
   reusedChat.messages[0].occurredAt=new Date(Math.ceil(Date.now()/60000)*60000+60000).toISOString();
   reusedChat.messages[0].time=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Madrid',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(reusedChat.messages[0].occurredAt));
   reusedChat.messages.push({...reusedChat.messages[0],sequence:2,author:'Propietario',direction:'sent',rawText:'Respuesta del propietario',text:'Respuesta del propietario'});
-  reusedChat.messages[0].dateLabel='24 septiembre';
-  reusedChat.exportedAt='2026-09-24T11:00:00.000Z';
-  importConversation(db,reusedChat,'new-period-101.json','2026-09-24',originalPropertyId,newPeriodId);
+  reusedChat.messages[0].dateLabel=new Intl.DateTimeFormat('es-ES',{timeZone:'Europe/Madrid',day:'numeric',month:'long'}).format(new Date(`${todayMadrid}T12:00:00Z`));
+  reusedChat.exportedAt=`${todayMadrid}T11:00:00.000Z`;
+  importConversation(db,reusedChat,'new-period-101.json',todayMadrid,originalPropertyId,newPeriodId);
   await page.getByRole('button',{name:'↻ Actualizar'}).click();
   await count(1);
   const realArrival=await page.evaluate(async ({propertyId,periodId})=>{const result=await fetch(`/api/properties/${propertyId}/periods/${periodId}/applicants?status=all`).then(r=>r.json());return result.items.find(item=>item.name==='Alba');},{propertyId:originalPropertyId,periodId:newPeriodId});
-  assert.equal(realArrival.arrivalDate,'2026-09-24','real imported arrival uses received message date');
+  assert.equal(realArrival.arrivalDate,todayMadrid,'real imported arrival uses received message date');
   assert.equal(realArrival.arrivalAt,reusedChat.messages[0].occurredAt,'real imported arrival uses received message time');
   assert.equal(realArrival.hasReplied,true,'real owner message in this period is reflected in the list');
   assert.equal(realArrival.awaitingReply,false,'real latest owner message means waiting for a reply');
@@ -702,7 +926,8 @@ try {
   const reusedDetail=await page.evaluate(async ({propertyId,periodId,applicantId})=>fetch(`/api/properties/${propertyId}/periods/${periodId}/applicants/${encodeURIComponent(applicantId)}`).then(r=>r.json()),{propertyId:originalPropertyId,periodId:newPeriodId,applicantId:realArrival.applicant_id});
   assert.equal(realArrival.messageCount,reusedDetail.messages.length,'new-period list count matches its stored detail');
   assert.equal(await page.locator('#rows tr[data-id="'+realArrival.applicant_id+'"] .person-button').innerText(),'Alba (2)');
-  assert.match(await page.locator('#rows tr[data-id="'+realArrival.applicant_id+'"] .arrival-date').innerText(),/24.*2026/);
+  assert.match(await page.locator('#rows tr[data-id="'+realArrival.applicant_id+'"] .arrival-date').innerText(),
+    new RegExp(`${Number(todayMadrid.slice(-2))}.*${todayMadrid.slice(0,4)}`));
   assert.match(await page.locator('#rows tr[data-id="'+realArrival.applicant_id+'"] .reply-status').innerText(),/Has respondido/);
   assert.equal(await page.locator('#rows tr[data-id="'+realArrival.applicant_id+'"] .pending-status').innerText(),'Esperando respuesta');
   await page.getByRole('button',{name:'Ver ficha de Alba'}).click();
@@ -717,8 +942,8 @@ try {
   await page.locator('#applicantDialog').waitFor({state:'hidden'});
   await count(2);
   const manualArrival=await page.evaluate(async ({propertyId,periodId})=>{const result=await fetch(`/api/properties/${propertyId}/periods/${periodId}/applicants?status=all`).then(r=>r.json());return result.items.find(item=>item.name==='Nueva inquilina');},{propertyId:originalPropertyId,periodId:newPeriodId});
-  assert.match(manualArrival.arrivalDate,/^2026-09-24$/,'manual arrival has fixed creation day');
-  assert.match(manualArrival.arrivalAt,/^2026-09-24T/,'manual arrival has creation instant');
+  assert.equal(manualArrival.arrivalDate,todayMadrid,'manual arrival has the current Madrid creation day');
+  assert.equal(new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(manualArrival.arrivalAt)),todayMadrid,'manual arrival has a creation instant on the current Madrid day');
   assert.equal(manualArrival.hasReplied,null,'manual applicant has no chat reply state');
   assert.equal(manualArrival.awaitingReply,null,'manual applicant has no pending chat turn');
   assert.equal(manualArrival.messageCount,0,'manual applicant has zero stored chat messages');
@@ -730,8 +955,8 @@ try {
   assert.match(await page.locator('#rows').innerText(),/Alba/);
   await choose('pendingReply','',2);
   reusedChat.messages.push({...reusedChat.messages[0],sequence:3,author:'Alba',direction:'received',rawText:'Una pregunta más',text:'Una pregunta más'});
-  reusedChat.exportedAt='2026-09-24T11:01:00.000Z';
-  importConversation(db,reusedChat,'new-period-101-update.json','2026-09-24',originalPropertyId,newPeriodId);
+  reusedChat.exportedAt=`${todayMadrid}T11:01:00.000Z`;
+  importConversation(db,reusedChat,'new-period-101-update.json',todayMadrid,originalPropertyId,newPeriodId);
   await page.getByRole('button',{name:'↻ Actualizar'}).click();
   await page.locator('#rows tr[data-id="'+realArrival.applicant_id+'"] .pending-status').getByText(/Pendiente de responder/).waitFor();
   const latestTurn=await page.evaluate(async ({propertyId,periodId})=>{const result=await fetch(`/api/properties/${propertyId}/periods/${periodId}/applicants?status=all`).then(r=>r.json());return result.items.find(item=>item.name==='Alba');},{propertyId:originalPropertyId,periodId:newPeriodId});

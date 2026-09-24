@@ -22,6 +22,20 @@ Desde **Editar vivienda** puedes eliminar una vivienda. Aparecerá en **Eliminad
 
 Puedes crear una ficha con **Añadir interesado** y completar nombre, contacto, personas, niños, mascotas, ingresos y notas privadas.
 
+### Visitas
+
+Cuando una persona quiera ver la vivienda, abre su ficha y pulsa **Programar visita**. La cita se crea manualmente: Morada no interpreta ni confirma automáticamente los mensajes del chat. Empieza en **Pendiente de confirmar**, dura 30 minutos por defecto y puedes marcarla como **Confirmada**, **Realizada** o **Cancelada**. Desde la misma ficha puedes reprogramar una visita sin crear otra distinta.
+
+El calendario adopta inicialmente la zona horaria del navegador y permite elegir otra zona IANA visible. Las nuevas visitas usan la zona seleccionada y, al editar una existente, se usa su zona guardada. Cambiar la zona de visualización no altera el instante de la visita: solo cambia cómo se muestra. En los cambios de hora, Morada rechaza una hora que no existe y, cuando una hora ocurre dos veces, pide escoger la ocurrencia correcta. Una búsqueda no se puede cerrar mientras tenga visitas pendientes o confirmadas que aún no hayan terminado.
+
+Abre **Calendario** desde Mis viviendas o desde el espacio de trabajo para consultar la agenda conjunta de todas las viviendas. Puedes filtrar por vivienda o estado; esos filtros solo cambian lo que ves y nunca excluyen citas de la comprobación de solapes al guardar. Si hay una coincidencia, Morada la muestra y permite guardar de todos modos de forma explícita. El margen de desplazamiento se configura para todo el calendario entre 0 y 180 minutos; se aplica solo entre viviendas diferentes.
+
+No se asignan responsables a las visitas, no hace falta una cuenta de Google y no se envían invitaciones externas.
+
+Puedes descargar una visita individual o el rango visible, con los filtros aplicados, en formato **.ics**. El archivo guarda los instantes de la cita; el calendario donde lo importes los mostrará según su propia zona horaria. Es una instantánea manual: cambiar o cancelar la visita en Morada no actualiza una copia que ya hayas importado en otro calendario. Para proteger la privacidad, el archivo solo incluye el horario, estado y el título genérico «Visita de vivienda»; no incluye el nombre ni el contacto del interesado, conversaciones, dirección o invitaciones.
+
+### Sincronización
+
 Para incorporar conversaciones, pulsa **Sincronizar datos desde Idealista** en la búsqueda abierta. La primera sincronización hace una revisión completa. Las siguientes suelen ser rápidas: al encontrar cinco chats conocidos seguidos sin cambios, deja de revisar los anteriores. Esa regla tiene en cuenta la conversación, incluidos mensajes enviados y recibidos, pero es una optimización: no garantiza que se hayan leído siempre todos los chats disponibles. Usa **Sincronización completa** cuando quieras revisarlos todos.
 
 Cada conversación se conserva una sola vez dentro de su búsqueda. Si varios chats parecen pertenecer a la misma persona, siguen siendo conversaciones distintas y no se unen automáticamente.

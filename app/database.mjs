@@ -122,6 +122,13 @@ export function openDatabase(filename) {
   if (!propertyColumns.includes('deleted_default_url'))
     db.exec('ALTER TABLE properties ADD COLUMN deleted_default_url TEXT');
   migratePeriods(db);
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS period_owner_key ON search_periods(id,property_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS applicant_owner_key ON applicants(id,property_id,period_id);`);
+  migrateVisits(db);
+  db.exec(`CREATE TABLE IF NOT EXISTS calendar_settings (
+      id INTEGER PRIMARY KEY CHECK(id=1),
+      travel_buffer_minutes INTEGER NOT NULL DEFAULT 0 CHECK(travel_buffer_minutes BETWEEN 0 AND 180));
+    INSERT OR IGNORE INTO calendar_settings(id,travel_buffer_minutes) VALUES (1,0);`);
   db.exec(`CREATE TABLE IF NOT EXISTS sync_batches (
       period_id TEXT PRIMARY KEY REFERENCES search_periods(id) ON DELETE CASCADE,
       id TEXT NOT NULL, completed_at TEXT NOT NULL, new_count INTEGER NOT NULL,
@@ -164,6 +171,46 @@ export function openDatabase(filename) {
       a.created_at,a.created_date
       FROM applicants a LEFT JOIN conversations c ON c.applicant_id=a.id;`);
   return db;
+}
+
+function visitsTableSql(name) {
+  return `CREATE TABLE ${name} (
+    id TEXT PRIMARY KEY, property_id TEXT NOT NULL REFERENCES properties(id),
+    period_id TEXT NOT NULL REFERENCES search_periods(id),
+    applicant_id TEXT NOT NULL REFERENCES applicants(id),
+    starts_at TEXT NOT NULL, ends_at TEXT NOT NULL,
+    timezone TEXT NOT NULL DEFAULT 'Europe/Madrid',
+    status TEXT NOT NULL CHECK(status IN ('pending_confirmation','confirmed','completed','cancelled')),
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    FOREIGN KEY (period_id,property_id) REFERENCES search_periods(id,property_id),
+    FOREIGN KEY (applicant_id,property_id,period_id)
+      REFERENCES applicants(id,property_id,period_id),
+    CHECK(ends_at>starts_at))`;
+}
+
+function migrateVisits(db) {
+  const existing=db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='visits'").get();
+  const madridOnly=existing&&/CHECK\s*\(\s*timezone\s*=\s*'Europe\/Madrid'\s*\)/i.test(existing.sql);
+  if(!existing) db.exec(visitsTableSql('visits'));
+  else if(madridOnly) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.exec(visitsTableSql('visits_zone_migration'));
+      db.exec(`INSERT INTO visits_zone_migration
+        (id,property_id,period_id,applicant_id,starts_at,ends_at,timezone,status,created_at,updated_at)
+        SELECT id,property_id,period_id,applicant_id,starts_at,ends_at,timezone,status,created_at,updated_at
+        FROM visits`);
+      db.exec('DROP TABLE visits');
+      db.exec('ALTER TABLE visits_zone_migration RENAME TO visits');
+      db.exec(`CREATE INDEX visits_period_applicant ON visits(property_id,period_id,applicant_id);
+        CREATE INDEX visits_schedule ON visits(starts_at,ends_at,status);`);
+      if(db.prepare('PRAGMA foreign_key_check').all().length)
+        throw new Error('La migración de visitas no conserva las referencias');
+      db.exec('COMMIT');
+    } catch(error) { db.exec('ROLLBACK'); throw error; }
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS visits_period_applicant ON visits(property_id,period_id,applicant_id);
+    CREATE INDEX IF NOT EXISTS visits_schedule ON visits(starts_at,ends_at,status);`);
 }
 
 function migratePeriods(db) {
@@ -1103,6 +1150,7 @@ export function purgeProperty(db,id) {
       (SELECT id FROM search_periods WHERE property_id=?)`).run(id);
     db.prepare(`DELETE FROM conversations WHERE period_id IN
       (SELECT id FROM search_periods WHERE property_id=?)`).run(id);
+    db.prepare('DELETE FROM visits WHERE property_id=?').run(id);
     db.prepare('DELETE FROM applicants WHERE property_id=?').run(id);
     db.prepare('DELETE FROM search_periods WHERE property_id=?').run(id);
     db.prepare('DELETE FROM property_listing_history WHERE property_id=?').run(id);
@@ -1119,6 +1167,10 @@ export function closePeriod(db, propertyId, periodId, chosenApplicantId) {
     throw new Error('Selecciona un interesado');
   db.exec('BEGIN');
   try {
+    if (db.prepare(`SELECT 1 FROM visits WHERE period_id=? AND status IN
+      ('pending_confirmation','confirmed') AND ends_at>? LIMIT 1`)
+      .get(periodId,new Date().toISOString()))
+      throw Object.assign(new Error('Hay visitas próximas en este periodo'),{code:'UPCOMING_VISITS'});
     const chosen = db.prepare('SELECT id FROM applicants WHERE id=? AND property_id=? AND period_id=?')
       .get(chosenApplicantId,propertyId,periodId);
     if (!chosen) throw Object.assign(new Error('Interesado no encontrado en este periodo'),{code:'APPLICANT_NOT_FOUND'});

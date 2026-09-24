@@ -611,7 +611,9 @@ test('closed search period preserves history and reused chat starts independent 
   const {db}=temporaryDb(t);
   add(db,501,[]);
   updateApplicant(db,'501',{favorite:true,notes:'Histórico'});
-  const server=createServer(db,{today:()=> '2026-09-24'});
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',
+    month:'2-digit',day:'2-digit'}).format(new Date());
+  const server=createServer(db,{today:()=>today});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   t.after(()=>new Promise(resolve=>server.close(resolve)));
   const root='/api/properties/13579135/periods';
@@ -631,7 +633,7 @@ test('closed search period preserves history and reused chat starts independent 
   assert.equal((await request(server,`${root}/${encodeURIComponent(original.id)}/sync`,{
     method:'POST',headers:json,body:'{}'})).status,409);
   response=await request(server,root,{method:'POST',headers:json,
-    body:JSON.stringify({rentalSince:'2026-09-24',monthlyRentCents:90000,
+    body:JSON.stringify({rentalSince:today,monthlyRentCents:90000,
       idealistaUrl:'https://www.idealista.com/inmueble/13579135/'})});
   assert.equal(response.status,201);
   const next=(await response.json()).period;
@@ -656,10 +658,12 @@ test('closed search period preserves history and reused chat starts independent 
   assert.equal(listApplicants(db,new URLSearchParams({status:'all'}),'13579135',original.id)[0].messageCount,1);
   assert.equal(applicantDetail(db,'chat:501','13579135',next.id),null);
   assert.equal(applicantDetail(db,'chat:501','13579135',original.id).notes,'Histórico');
-  const tomorrow=fxtureMessage('Fuera de la ventana','2026-09-25','2026-09-25T08:00:00.000Z',2);
-  importConversation(db,fixture(502,{activityDate:'2026-09-24',exportedAt:'2026-09-25T08:00:00.000Z',
+  const nextDay=new Date(Date.parse(`${day}T00:00:00.000Z`)+86400000).toISOString().slice(0,10);
+  const nextDayAt=`${nextDay}T08:00:00.000Z`;
+  const tomorrow=fxtureMessage('Fuera de la ventana',nextDay,nextDayAt,2);
+  importConversation(db,fixture(502,{activityDate:day,exportedAt:nextDayAt,
     messages:[fresh,tomorrow]}),
-    'run-2026-09-25/502.json','2026-09-25','13579135',next.id,'2026-09-24');
+    'run-next-day/502.json',nextDay,'13579135',next.id,day);
   assert.equal(applicantDetail(db,'502','13579135',next.id).messages.length,1);
   assert.equal(listPeriods(db,'13579135').length,2);
   assert.equal(getPeriod(db,'13579135',original.id).chosenApplicantId,'chat:501');
