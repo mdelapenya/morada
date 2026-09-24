@@ -225,7 +225,21 @@ try {
     {text:'Respuesta de prueba',direction:'sent'},
     {text:'<img src=x onerror=window.pwned=true> Mensaje seguro',direction:'received'},
   ],'the newest canonical messages, including same-minute ties, render first');
+  const detailDialog=page.locator('#detail');
+  await page.locator('#detailBody').click();
+  assert.equal(await detailDialog.evaluate(dialog=>dialog.open),true,'clicking detail content keeps it open');
+  const detailBox=await detailDialog.boundingBox();
+  assert.ok(detailBox&&detailBox.x>2,'the responsive dialog leaves a backdrop target beside it');
+  await page.mouse.click(detailBox.x+2,detailBox.y+2);
+  assert.equal(await detailDialog.evaluate(dialog=>dialog.open),true,'clicking dialog padding keeps it open');
+  await page.mouse.click(detailBox.x-2,detailBox.y+Math.min(20,detailBox.height/2));
+  assert.equal(await detailDialog.evaluate(dialog=>dialog.open),false,'clicking the native backdrop closes the detail');
+  await page.getByRole('button', { name: 'Ver ficha de Diego' }).first().click();
+  await page.keyboard.press('Escape');
+  assert.equal(await detailDialog.evaluate(dialog=>dialog.open),false,'Escape closes the detail through the shared handler');
+  await page.getByRole('button', { name: 'Ver ficha de Diego' }).first().click();
   await page.getByRole('button', { name: 'Cerrar detalle' }).click();
+  assert.equal(await detailDialog.evaluate(dialog=>dialog.open),false,'the close button still closes the detail through the shared handler');
 
   await page.getByRole('button', { name: 'Ver ficha de Alba' }).first().click();
   const notes = page.locator('#detailNotes');
