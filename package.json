@@ -1,0 +1,34 @@
+{
+  "name": "morada",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint app scripts test tools eslint.config.mjs",
+    "build": "node tools/build.mjs",
+    "start": "node --experimental-sqlite app/server.mjs",
+    "start:background": "node app/start-background.mjs",
+    "test": "IDEALISTA_LEGACY_PROPERTY_FILE=./test/legacy-property.json node --experimental-sqlite --test test/*.test.mjs",
+    "test:ui": "IDEALISTA_LEGACY_PROPERTY_FILE=./test/legacy-property.json node --experimental-sqlite test/ui.mjs",
+    "db:build": "node --experimental-sqlite app/import.mjs",
+    "db:serve": "npm start",
+    "export:today": "node scripts/export-today.mjs",
+    "probe:cookies": "node scripts/probe-cookies.mjs",
+    "login": "node scripts/browser.mjs login",
+    "inspect": "node scripts/browser.mjs inspect"
+  },
+  "files": [
+    "app/",
+    "scripts/",
+    "README.md",
+    "DEVELOPMENT.md"
+  ],
+  "dependencies": {
+    "playwright": "^1.63.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "eslint": "9.39.5",
+    "globals": "16.5.0"
+  }
+}

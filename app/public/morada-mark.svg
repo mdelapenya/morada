@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc" preserveAspectRatio="xMidYMid meet">
+  <title id="title">Morada</title>
+  <desc id="desc">Símbolo de Morada: una M que forma la entrada de una vivienda.</desc>
+  <rect x="2" y="2" width="60" height="60" rx="18" fill="#6232A8"/>
+  <path d="M17 47V18l15 21L47 18v29" fill="none" stroke="#F5F0FB" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M27.5 47v-4.5a4.5 4.5 0 0 1 9 0V47" fill="none" stroke="#F5F0FB" stroke-width="3.5" stroke-linecap="round"/>
+</svg>
