@@ -795,7 +795,7 @@ try {
   assert.equal(await page.locator('#sync').isDisabled(),true);
   const homeRequests=[];
   page.on('request',request=>{if(new URL(request.url()).pathname.includes('/applicants'))homeRequests.push(request.url());});
-  await page.getByRole('link',{name:'Inicio · Mis viviendas'}).click();
+  await page.getByRole('link',{name:'Inicio de Morada · Mis viviendas'}).click();
   await page.getByRole('heading',{name:'Mis viviendas'}).waitFor();
   assert.equal(await page.locator('.home-card').count(),3,'overview lists each housing');
   assert.equal(homeRequests.length,0,'home does not fetch applicants');
@@ -821,7 +821,7 @@ try {
   await count(0);
   const centroId=new URL(page.url()).searchParams.get('propertyId');
   assert.ok(centroId&&centroId!==rioId);
-  await page.getByRole('link',{name:'Inicio · Mis viviendas'}).click();
+  await page.getByRole('link',{name:'Inicio de Morada · Mis viviendas'}).click();
   await page.getByRole('heading',{name:'Mis viviendas'}).waitFor();
   assert.equal(await page.locator('.home-card').count(),4);
   assert.match(await page.locator('.home-card').filter({hasText:'Casa Centro'}).innerText(),/650,00/);
