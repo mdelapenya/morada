@@ -99,6 +99,16 @@ async function resetFilters() {
   await count(8);
 }
 
+async function openSyncDetails() {
+  const details = page.locator('#syncDetails');
+  if (!(await details.evaluate(node => node.open))) await page.locator('#syncDetailsSummary').click();
+}
+
+async function openSyncOptions() {
+  const details = page.locator('#syncOptions');
+  if (!(await details.evaluate(node => node.open))) await page.locator('#syncOptionsSummary').click();
+}
+
 async function choose(id, value, expected) {
   await page.locator(`#${id}`).selectOption(value);
   await count(expected);
@@ -110,6 +120,18 @@ async function columnValues(key) {
 }
 async function visibleNames(){return page.locator('.person-button').evaluateAll(buttons=>buttons.map(button=>button.textContent.replace(/ \(\d+\)$/,'')));}
 async function setRange(id, value) { await page.locator(`#${id}`).evaluate((input, next) => { input.value = next; input.dispatchEvent(new Event('input', { bubbles: true })); }, String(value)); }
+async function openManage(){const disclosure=page.locator('#manageDisclosure');if(!(await disclosure.evaluate(node=>node.open)))await page.locator('#manageSummary').click();}
+async function managementAction(name){await openManage();return page.getByRole('button',{name});}
+async function selectedPropertyName(){return page.locator('#propertySelect option:checked').innerText();}
+async function assertSplitGeometry(width){
+  const bounds=await page.evaluate(()=>{
+    const main=document.querySelector('#sync').getBoundingClientRect();
+    const options=document.querySelector('#syncOptionsSummary').getBoundingClientRect();
+    return {mainTop:main.top,mainBottom:main.bottom,optionsTop:options.top,optionsBottom:options.bottom};
+  });
+  assert.ok(Math.abs(bounds.mainTop-bounds.optionsTop)<=1&&Math.abs(bounds.mainBottom-bounds.optionsBottom)<=1,
+    `split sync surfaces align at ${width}px`);
+}
 
 try {
   await page.goto(baseUrl, { waitUntil: 'networkidle' });
@@ -186,7 +208,7 @@ try {
   await choose('children', '0', 3);
   assert.equal(await page.locator('th[data-sort="people_count"]').getAttribute('aria-sort'), 'descending');
   await resetFilters();
-  await page.getByRole('button', { name: '↻ Actualizar' }).click();
+  await page.getByRole('button', { name: 'Recargar listado' }).click();
   await count(8);
   assert.equal(await page.locator('th[data-sort="people_count"]').getAttribute('aria-sort'), 'descending');
 
@@ -280,22 +302,30 @@ try {
   assert.equal(syncPosts, 1, 'one click starts exactly one sync request');
   assert.deepEqual(syncPostBodies.at(-1),{},'older sync API still receives its original empty POST');
   await assert.equal(await syncButton.isDisabled(), true);
-  await page.getByText(/Buscando chats nuevos .*Desde 23 de septiembre de 2026 · 2 candidatos · 1 exportado/).waitFor();
+  await openSyncDetails();
+  await page.locator('#syncStatus').getByText(/Buscando chats nuevos .*Desde 23 de septiembre de 2026 · 2 candidatos · 1 exportado/).waitFor();
   fakeSyncJob = { ...fakeSyncJob, state: 'succeeded', phase: null, endedAt: '2026-09-23T10:02:00.000Z', imported: 0, updated: 0 };
-  await page.getByText('Sincronización completada. Desde 23 de septiembre de 2026.').waitFor({ timeout: 2500 });
+  await page.locator('#syncStatus').getByText('Sincronización completada. Desde 23 de septiembre de 2026.').waitFor({ timeout: 2500 });
   await count(3);
   assert.equal(await page.locator('#children').inputValue(), '0');
   assert.equal(await page.locator('th[data-sort="people_count"]').getAttribute('aria-sort'), 'descending');
+  assert.equal(await page.getByRole('link',{name:'Interesados'}).getAttribute('aria-current'),'page','interested view marks global navigation active');
+  assert.equal(new URL(await page.getByRole('link',{name:'Calendario'}).getAttribute('href'),baseUrl).searchParams.has('propertyId'),false,'calendar navigation is global');
+  await page.screenshot({path:path.join(screenshots,'header-legacy-desktop.png')});
+  await openManage();
+  await page.screenshot({path:path.join(screenshots,'header-legacy-management-open.png')});
+  await page.keyboard.press('Escape');
 
   fakeSyncJob = { ...fakeSyncJob, id: 'fake-sync-running-after-reload', state: 'running', phase: 'exporting', candidates: 4, exported: 2, imported: 0 };
   const postsBeforeReload = syncPosts;
   await page.reload({ waitUntil: 'networkidle' });
-  await page.getByText(/Preparando conversaciones .*Desde 23 de septiembre de 2026 · 4 candidatos · 2 exportados/).waitFor();
+  await openSyncDetails();
+  await page.locator('#syncStatus').getByText(/Preparando conversaciones .*Desde 23 de septiembre de 2026 · 4 candidatos · 2 exportados/).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Sincronizando…' }).isDisabled(), true);
   assert.equal(syncPosts, postsBeforeReload, 'reloading adopts a running job without a POST');
   fakeSyncJob = { ...fakeSyncJob, state: 'failed', phase: null, error: 'Chrome necesita que vuelvas a iniciar sesión.' };
   await page.getByText('Chrome necesita que vuelvas a iniciar sesión.').waitFor({ timeout: 2500 });
-  assert.equal(await page.getByRole('button', { name: 'Sincronizar datos desde Idealista' }).isDisabled(), false);
+  assert.equal(await page.locator('#sync').isDisabled(), false, 'a failed synchronization restores the primary action');
   await resetFilters();
 
   await page.locator('#toast').waitFor({ state: 'hidden' });
@@ -310,7 +340,7 @@ try {
   await page.reload({ waitUntil: 'networkidle' });
   await count(8);
   const originalPropertyId = await page.locator('#propertySelect').inputValue();
-  await page.getByRole('button', { name: 'Añadir vivienda' }).click();
+  await (await managementAction('Añadir vivienda')).click();
   await page.locator('#newPropertyForm [name="title"]').fill('Piso Olivar');
   await page.locator('#newPropertyForm [name="address"]').fill('Calle Olivar 12');
   await page.locator('#newPropertyForm [name="monthlyRent"]').fill('900.50');
@@ -320,7 +350,7 @@ try {
   const olivarId = await page.locator('#propertySelect').inputValue();
   assert.notEqual(olivarId, originalPropertyId);
   await count(0);
-  assert.match(await page.locator('#propertyTitle').innerText(), /Piso Olivar/);
+  assert.match(await selectedPropertyName(), /Piso Olivar/);
   assert.match(await page.locator('#propertyAddress').innerText(), /900,50/);
   assert.equal(await page.locator('#sync').isDisabled(), true);
   assert.equal(await page.locator('#syncFull').isDisabled(), true,'full sync is unavailable without a listing URL');
@@ -365,7 +395,7 @@ try {
   await setRange('incomeMin',1250);await setRange('incomeMax',1300);await count(1);
   await page.getByRole('button', { name: 'Limpiar' }).click();await count(1);
 
-  await page.getByRole('button', { name: 'Editar vivienda' }).click();
+  await (await managementAction('Editar vivienda')).click();
   const editHousing = page.locator('#newPropertyForm');
   assert.equal(await editHousing.locator('[name="title"]').inputValue(), 'Piso Olivar');
   assert.equal(await editHousing.locator('[name="monthlyRent"]').inputValue(), '900.5');
@@ -378,23 +408,23 @@ try {
   await page.locator('#propertyDialog').waitFor({ state: 'hidden' });
   await count(1);
   assert.equal(await page.locator('#propertySelect').inputValue(), olivarId);
-  assert.match(await page.locator('#propertyTitle').innerText(), /Piso Olivar renovado/);
+  assert.match(await selectedPropertyName(), /Piso Olivar renovado/);
   assert.match(await page.locator('#propertyAddress').innerText(), /Calle Olivar 14[\s\S]*950,75/);
   assert.equal(await page.locator('#rentalSince').inputValue(), '2026-09-24');
   assert.equal(await page.locator('#sync').isDisabled(), false);
   await page.reload({ waitUntil: 'networkidle' });
   await count(1);
   assert.equal(await page.locator('#propertySelect').inputValue(), olivarId);
-  assert.match(await page.locator('#propertyTitle').innerText(), /Piso Olivar renovado/);
+  assert.match(await selectedPropertyName(), /Piso Olivar renovado/);
   await page.getByRole('button', { name: 'Ver ficha de Luisa Manual' }).click();
   await page.locator('#detailNotes').waitFor();
   assert.equal(await page.locator('#detailNotes').inputValue(), 'Visita confirmada');
   await page.getByRole('button', { name: 'Cerrar detalle' }).click();
-  await page.getByRole('button', { name: 'Editar vivienda' }).click();
+  await (await managementAction('Editar vivienda')).click();
   assert.equal(await editHousing.locator('[name="idealistaUrl"]').isEditable(), true);
   await page.getByRole('button', { name: 'Cerrar vivienda' }).click();
 
-  await page.getByRole('button', { name: 'Añadir vivienda' }).click();
+  await (await managementAction('Añadir vivienda')).click();
   await page.locator('#newPropertyForm [name="title"]').fill('Ático Río');
   await page.locator('#newPropertyForm [name="rentalSince"]').fill('2026-09-23');
   await page.locator('#newPropertyForm [name="idealistaUrl"]').fill('https://www.idealista.com/inmueble/12345678/');
@@ -411,12 +441,13 @@ try {
   assert.equal(await page.locator('#detail').evaluate(dialog=>dialog.open), false);
   assert.equal(await page.locator('#favoriteCount').innerText(), '0');
   await page.locator('#propertySelect').selectOption(rioId);await count(0);
-  assert.match(await page.locator('#propertyTitle').innerText(), /Ático Río/);
+  assert.match(await selectedPropertyName(), /Ático Río/);
   assert.match(new URL(page.url()).searchParams.get('propertyId'), new RegExp(rioId));
 
   fakeSyncJob = { ...fakeSyncJob, id: 'running-olivar', propertyId: olivarId, state: 'running', phase: 'exporting', sinceDate: '2026-09-23', candidates: 3, exported: 1 };
   await page.reload({ waitUntil: 'networkidle' });
-  await page.getByText(/Preparando conversaciones · Piso Olivar/).waitFor();
+  await openSyncDetails();
+  await page.locator('#syncStatus').getByText(/Preparando conversaciones · Piso Olivar/).waitFor();
   assert.equal(await page.locator('#sync').isDisabled(), true);
   fakeSyncJob = { ...fakeSyncJob, state: 'failed', phase: null, error: 'Prueba terminada' };
   await page.getByText('Prueba terminada').waitFor({ timeout: 2500 });
@@ -438,14 +469,14 @@ try {
   await page.locator('#propertySelect').selectOption(rioId);
   await count(0);
   await page.waitForTimeout(500);
-  assert.match(await page.locator('#propertyTitle').innerText(), /Ático Río/, 'late Olivar response cannot overwrite Río');
+  assert.match(await selectedPropertyName(), /Ático Río/, 'late Olivar response cannot overwrite Río');
   assert.equal(new URL(page.url()).searchParams.get('propertyId'), rioId);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload({ waitUntil: 'networkidle' });
   await count(0);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'mobile multi-property UI overflows');
-  await page.getByRole('button', { name: 'Editar vivienda' }).click();
+  await (await managementAction('Editar vivienda')).click();
   assert.equal(await page.locator('#propertyDialog').evaluate(dialog=>dialog.scrollWidth<=dialog.clientWidth), true, 'mobile housing form overflows');
   await page.getByRole('button', { name: 'Cerrar vivienda' }).click();
   await page.getByRole('button', { name: 'Añadir interesado' }).click();
@@ -462,25 +493,29 @@ try {
   assert.match(await page.locator('#periodSummary').innerText(), /Búsqueda activa.*825,00/);
   const realSyncCapability=await fetch(`${baseUrl}/api/properties/${originalPropertyId}/periods/${encodeURIComponent(originalPeriodId)}/sync`).then(response=>response.json());
   assert.equal(realSyncCapability.supportsSyncModes,true,'isolated backend advertises the real sync-mode capability');
+  await page.locator('#syncOptions').waitFor({state:'visible'});
+  await openSyncOptions();
   await page.locator('#syncFull').waitFor({state:'visible'});
   const scopedSyncPath=`/api/properties/${originalPropertyId}/periods/${encodeURIComponent(originalPeriodId)}/sync`;
   await page.locator('#sync').click();
+  await openSyncDetails();
   assert.equal(syncPostPaths.at(-1),scopedSyncPath);
   assert.deepEqual(syncPostBodies.at(-1),{},'main sync requests the backward-compatible default mode');
   assert.equal(fakeSyncJob.requestedMode,'incremental');
   assert.equal(fakeSyncJob.effectiveMode,'full','first incremental request can perform a complete baseline');
   assert.equal(await page.locator('#syncFull').isDisabled(),true,'full mode cannot start while another job runs');
   fakeSyncJob={...fakeSyncJob,state:'succeeded',phase:null,examined:8,candidates:8,fullCoverage:true,imported:1,updated:2,newIncomingApplicants:1,newIncomingMessages:2};
-  await page.getByText(/Revisión completa finalizada.*8 revisiones de chat.*8 candidatos en el listado.*1 nueva importada.*2 historiales actualizados.*1 interesado con mensajes recibidos nuevos.*2 mensajes recibidos nuevos/).waitFor({timeout:2500});
+  await page.locator('#syncStatus').getByText(/Revisión completa finalizada.*8 revisiones de chat.*8 candidatos en el listado.*1 nueva importada.*2 historiales actualizados.*1 interesado con mensajes recibidos nuevos.*2 mensajes recibidos nuevos/).waitFor({timeout:2500});
   assert.equal(await page.locator('#syncFull').isDisabled(),false);
   nextIncrementalEffectiveMode='incremental';
   await page.locator('#sync').click();
   assert.deepEqual(syncPostBodies.at(-1),{},'later main sync still uses the default request');
   fakeSyncJob={...fakeSyncJob,examined:7,candidates:20,exported:4,unchangedStreak:5};
-  await page.getByText(/7 revisiones de chat · 20 candidatos en el listado/).waitFor({timeout:2500});
+  await page.locator('#syncStatus').getByText(/7 revisiones de chat · 20 candidatos en el listado/).waitFor({timeout:2500});
   fakeSyncJob={...fakeSyncJob,state:'succeeded',phase:null,earlyStopped:true,stopReason:'unchanged_streak',fullCoverage:false,imported:0,updated:0,newIncomingApplicants:0,newIncomingMessages:0};
-  await page.getByText(/Revisión rápida finalizada.*7 revisiones de chat.*20 candidatos en el listado.*Detenido tras 5 chats consecutivos sin novedades/).waitFor({timeout:2500});
+  await page.locator('#syncStatus').getByText(/Revisión rápida finalizada.*7 revisiones de chat.*20 candidatos en el listado.*Detenido tras 5 chats consecutivos sin novedades/).waitFor({timeout:2500});
   assert.doesNotMatch(await page.locator('#syncStatus').innerText(),/Sincronización completada/,'early stop does not claim full coverage');
+  await openSyncOptions();
   await page.locator('#syncFull').click();
   assert.deepEqual(syncPostBodies.at(-1),{mode:'full'},'explicit full action sends the full mode');
   const postsWhileFullRunning=syncPosts;
@@ -489,11 +524,14 @@ try {
   await page.locator('#syncFull').evaluate(button=>button.click());
   assert.equal(syncPosts,postsWhileFullRunning,'disabled control cannot duplicate a running sync');
   await page.locator('#propertySelect').selectOption(rioId);await count(0);
+  await openSyncOptions();
   await page.locator('#syncFull').waitFor({state:'visible'});
   assert.equal(await page.locator('#sync').isDisabled(),true,'global running job blocks another housing');
   assert.equal(await page.locator('#syncFull').isDisabled(),true,'full mode shares the global running guard');
   await page.locator('#propertySelect').selectOption(originalPropertyId);await count(8);
   await page.reload({waitUntil:'networkidle'});
+  await openSyncDetails();
+  await openSyncOptions();
   assert.equal(await page.locator('#sync').isDisabled(),true,'reload adopts the existing job');
   assert.equal(await page.locator('#syncFull').isDisabled(),true);
   fakeSyncJob={...fakeSyncJob,state:'failed',phase:null,error:'No se pudo completar la revisión completa.'};
@@ -502,7 +540,7 @@ try {
   await page.locator('#syncFull').click();
   assert.deepEqual(syncPostBodies.at(-1),{mode:'full'});
   fakeSyncJob={...fakeSyncJob,state:'succeeded',phase:null,examined:22,candidates:20,fullCoverage:true,earlyStopped:false,stopReason:null,error:null,imported:0,updated:0};
-  await page.getByText(/Revisión completa finalizada.*22 revisiones de chat.*20 candidatos en el listado/).waitFor({timeout:2500});
+  await page.locator('#syncStatus').getByText(/Revisión completa finalizada.*22 revisiones de chat.*20 candidatos en el listado/).waitFor({timeout:2500});
   const receivedOnly=await page.evaluate(async ({propertyId,periodId})=>{const result=await fetch(`/api/properties/${propertyId}/periods/${periodId}/applicants?status=all`).then(r=>r.json());return result.items.find(item=>item.name==='Alba');},{propertyId:originalPropertyId,periodId:originalPeriodId});
   assert.equal(receivedOnly.hasReplied,false,'real received-only chat has no owner reply');
   assert.equal(receivedOnly.awaitingReply,null,'undated legacy message cannot assert a pending turn');
@@ -535,7 +573,7 @@ try {
     else for(const item of body.items){const external=String(item.conversation_id).split(':').at(-1);Object.assign(item,attentionStates[external]||{syncAttention:null,newIncomingCount:0,attentionRevision:null},arrivalFixture[external],{hasReplied:Object.hasOwn(replyFixture,external)?replyFixture[external]:null,awaitingReply:pendingFixture[external],messageCount:messageCountFixture[external]});}
     await route.fulfill({response,body:JSON.stringify(body)});
   });
-  await page.getByRole('button',{name:'↻ Actualizar'}).click();
+  await page.getByRole('button',{name:'Recargar listado'}).click();
   await page.locator('#rows tr[data-id="chat:101"] .attention-badge').getByText('Nuevo mensaje (2)').waitFor();
   await page.locator('#rows tr[data-id="chat:102"] .attention-badge').getByText('Nuevo').waitFor();
   await page.locator('th[data-sort="arrivalDate"]').waitFor({state:'visible'});
@@ -620,7 +658,7 @@ try {
   assert.deepEqual(attentionAcks.at(-1),{id:'102',revision:'b1'});
   await page.getByRole('button',{name:'Cerrar detalle'}).click();
   attentionStates[101]={syncAttention:'message',newIncomingCount:1,attentionRevision:'r3'};
-  await page.getByRole('button',{name:'↻ Actualizar'}).click();
+  await page.getByRole('button',{name:'Recargar listado'}).click();
   await page.locator('#rows tr[data-id="chat:101"] .attention-badge').getByText('Nuevo mensaje').waitFor();
   delayAttentionDetail=true;
   await page.getByRole('button',{name:'Ver ficha de Alba'}).click();
@@ -638,36 +676,47 @@ try {
   assert.equal(new URL(page.url()).searchParams.has('sort'),false,'old count-sort bookmark falls back to default sorting');
   assert.equal(await page.locator('#sortSummary').innerText(),'Actividad más reciente primero');
   assert.equal(await page.locator('#newPeriod').isVisible(),false,'cannot open a second search while one is open');
-  const desktopToolbar=await page.evaluate(()=>{
-    const link=document.getElementById('workspaceCalendar'),peer=document.getElementById('editProperty');
-    const a=getComputedStyle(link),b=getComputedStyle(peer);
-    const management=document.querySelector('.toolbar-management').getBoundingClientRect();
-    const sync=document.querySelector('.toolbar-sync').getBoundingClientRect();
-    return {fontSize:a.fontSize,peerFontSize:b.fontSize,height:link.getBoundingClientRect().height,
-      peerHeight:peer.getBoundingClientRect().height,borderRadius:a.borderRadius,peerBorderRadius:b.borderRadius,
-      decoration:a.textDecorationLine,gap:sync.left-management.right};
-  });
-  assert.equal(desktopToolbar.fontSize,desktopToolbar.peerFontSize,'Calendario uses the same button typography');
-  assert.equal(desktopToolbar.height,desktopToolbar.peerHeight,'Calendario matches peer button height');
-  assert.equal(desktopToolbar.borderRadius,desktopToolbar.peerBorderRadius,'Calendario matches peer button shape');
-  assert.equal(desktopToolbar.decoration,'none','Calendario link has button styling');
-  assert.ok(desktopToolbar.gap>=20,'management and synchronization have desktop breathing room');
+  await page.getByRole('link',{name:'Interesados'}).waitFor();
+  assert.equal(await page.getByRole('link',{name:'Interesados'}).getAttribute('aria-current'),'page','interested view marks global navigation active');
+  assert.equal(new URL(await page.getByRole('link',{name:'Calendario'}).getAttribute('href'),baseUrl).searchParams.has('propertyId'),false,'calendar navigation is global');
+  await assertSplitGeometry(1440);
+  await page.screenshot({path:path.join(screenshots,'header-desktop.png')});
+  await openManage();
+  assert.equal(await page.locator('#manageDisclosure').evaluate(node=>node.open),true);
+  await page.screenshot({path:path.join(screenshots,'header-management-open.png')});
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#manageDisclosure').evaluate(node=>node.open),false,'management disclosure closes with Escape');
+  await openManage();
+  await (await managementAction('Editar vivienda')).click();
+  assert.equal(await page.locator('#manageDisclosure').evaluate(node=>node.open),false,'management action closes its disclosure');
+  await page.getByRole('button',{name:'Cerrar vivienda'}).click();
+  await page.locator('#syncOptionsSummary').click();
+  assert.equal(await page.locator('#syncOptions').evaluate(node=>node.open),true,'advanced synchronization is discoverable');
+  await page.screenshot({path:path.join(screenshots,'header-sync-options-open.png')});
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#syncOptions').evaluate(node=>node.open),false,'synchronization options close with Escape');
   await page.setViewportSize({width:390,height:844});
-  const originalTitle=await page.locator('#propertyTitle').innerText();
-  await page.locator('#propertyTitle').evaluate(node=>node.textContent='Vivienda sintética con un nombre extraordinariamente largo para comprobar la barra');
+  await assertSplitGeometry(390);
+  const originalTitle=await selectedPropertyName();
+  await page.locator('#propertySelect option:checked').evaluate(node=>node.textContent='Vivienda sintética con un nombre extraordinariamente largo para comprobar la barra');
   const mobileToolbar=await page.evaluate(()=>{
-    const management=document.querySelector('.toolbar-management').getBoundingClientRect();
+    const heading=document.querySelector('.workspace-heading').getBoundingClientRect();
+    const context=document.querySelector('.workspace-context').getBoundingClientRect();
     const sync=document.querySelector('.toolbar-sync').getBoundingClientRect();
-    return {width:document.documentElement.scrollWidth,viewport:window.innerWidth,verticalGap:sync.top-management.bottom};
+    return {width:document.documentElement.scrollWidth,viewport:window.innerWidth,headingBottom:heading.bottom,contextTop:context.top,syncBottom:sync.bottom};
   });
   assert.ok(mobileToolbar.width<=mobileToolbar.viewport,'long synthetic title and toolbar fit at 390px');
-  assert.ok(mobileToolbar.verticalGap>=12,'mobile action groups have spacing');
-  await page.locator('#propertyTitle').evaluate((node,title)=>node.textContent=title,originalTitle);
+  assert.ok(mobileToolbar.contextTop>=mobileToolbar.syncBottom+12,'mobile context follows synchronization actions with spacing');
+  await page.screenshot({path:path.join(screenshots,'header-mobile.png')});
+  await page.locator('#propertySelect option:checked').evaluate((node,title)=>node.textContent=title,originalTitle);
+  await page.setViewportSize({width:900,height:900});
+  await assertSplitGeometry(900);
+  await page.screenshot({path:path.join(screenshots,'header-tablet.png')});
   await page.setViewportSize({width:1440,height:980});
-  await page.getByRole('button',{name:'Editar vivienda'}).click();
+  await (await managementAction('Editar vivienda')).click();
   assert.equal(await page.locator('#newPropertyForm [name="monthlyRent"]').isVisible(),false,'housing edit contains stable fields only');
   await page.getByRole('button',{name:'Cerrar vivienda'}).click();
-  await page.getByRole('button',{name:'Editar búsqueda'}).click();
+  await (await managementAction('Editar búsqueda')).click();
   assert.equal(await page.locator('#periodForm [name="monthlyRent"]').inputValue(),'825');
   await page.locator('#periodForm [data-close]').click();
   await page.getByRole('button',{name:'Ver ficha de Alba'}).click();
@@ -775,6 +824,20 @@ try {
   assert.ok(await page.locator('#calendarDays .calendar-event').count()>0,'a visit beginning in the halo appears on its overlapping October day');
   assert.match(await page.locator('#agendaItems').innerText(),/30 sept.*23:45.*en curso/i,'an overnight visit identifies its prior-day start in the next-day agenda');
   await page.getByRole('button',{name:/15 de octubre de 2026/}).click();
+  await page.locator('.agenda-visit.is-confirmed').waitFor();
+  await page.screenshot({path:path.join(screenshots,'calendar-confirmed.png')});
+  const visitEmphasis=await page.evaluate(()=>{
+    const weight=node=>Number.parseInt(getComputedStyle(node).fontWeight,10);
+    const confirmedGrid=document.querySelector('.calendar-event.is-confirmed');
+    const pendingGrid=document.querySelector('.calendar-event:not(.is-confirmed)');
+    const confirmedAgenda=document.querySelector('.agenda-visit.is-confirmed');
+    const pendingAgenda=document.querySelector('.agenda-visit:not(.is-confirmed)');
+    return {confirmedGrid:weight(confirmedGrid),pendingGrid:weight(pendingGrid),
+      confirmedAgenda:weight(confirmedAgenda.querySelector('.visit-status')),
+      pendingAgenda:weight(pendingAgenda.querySelector('.visit-status'))};
+  });
+  assert.ok(visitEmphasis.confirmedGrid>visitEmphasis.pendingGrid&&visitEmphasis.confirmedAgenda>visitEmphasis.pendingAgenda,
+    'confirmed visits are visually emphasized over pending visits in the grid and agenda');
   await page.locator('#calendarProperty').selectOption(originalPropertyId);
   await page.locator('#agendaItems').getByText('Alba').waitFor();
   assert.equal(await page.locator('#agendaItems').getByText('Luisa Manual').count(),0,'property filter hides the other visit from the agenda');
@@ -891,7 +954,7 @@ try {
   assert.equal(await page.getByRole('button',{name:'Programar visita'}).count(),0,'closed periods do not allow new visits');
   assert.equal(await page.getByRole('button',{name:/Editar visita del/i}).count(),0,'closed periods do not allow visit edits');
   await page.getByRole('button',{name:'Cerrar detalle'}).click();
-  await page.getByRole('button',{name:'Nueva búsqueda'}).click();
+  await (await managementAction('Nueva búsqueda')).click();
   assert.equal(await page.locator('#periodForm [name="monthlyRent"]').inputValue(),'825');
   assert.match(await page.locator('#periodForm [name="idealistaUrl"]').inputValue(),/13579135/);
   assert.equal(await page.locator('#periodForm [name="rentalSince"]').inputValue(),new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()));
@@ -915,7 +978,7 @@ try {
   reusedChat.messages[0].dateLabel=new Intl.DateTimeFormat('es-ES',{timeZone:'Europe/Madrid',day:'numeric',month:'long'}).format(new Date(`${todayMadrid}T12:00:00Z`));
   reusedChat.exportedAt=`${todayMadrid}T11:00:00.000Z`;
   importConversation(db,reusedChat,'new-period-101.json',todayMadrid,originalPropertyId,newPeriodId);
-  await page.getByRole('button',{name:'↻ Actualizar'}).click();
+  await page.getByRole('button',{name:'Recargar listado'}).click();
   await count(1);
   const realArrival=await page.evaluate(async ({propertyId,periodId})=>{const result=await fetch(`/api/properties/${propertyId}/periods/${periodId}/applicants?status=all`).then(r=>r.json());return result.items.find(item=>item.name==='Alba');},{propertyId:originalPropertyId,periodId:newPeriodId});
   assert.equal(realArrival.arrivalDate,todayMadrid,'real imported arrival uses received message date');
@@ -957,7 +1020,7 @@ try {
   reusedChat.messages.push({...reusedChat.messages[0],sequence:3,author:'Alba',direction:'received',rawText:'Una pregunta más',text:'Una pregunta más'});
   reusedChat.exportedAt=`${todayMadrid}T11:01:00.000Z`;
   importConversation(db,reusedChat,'new-period-101-update.json',todayMadrid,originalPropertyId,newPeriodId);
-  await page.getByRole('button',{name:'↻ Actualizar'}).click();
+  await page.getByRole('button',{name:'Recargar listado'}).click();
   await page.locator('#rows tr[data-id="'+realArrival.applicant_id+'"] .pending-status').getByText(/Pendiente de responder/).waitFor();
   const latestTurn=await page.evaluate(async ({propertyId,periodId})=>{const result=await fetch(`/api/properties/${propertyId}/periods/${periodId}/applicants?status=all`).then(r=>r.json());return result.items.find(item=>item.name==='Alba');},{propertyId:originalPropertyId,periodId:newPeriodId});
   assert.equal(latestTurn.hasReplied,true,'earlier owner reply remains true after new incoming message');
@@ -1012,10 +1075,10 @@ try {
   await page.reload({waitUntil:'networkidle'});
   await count(2);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'period UI overflows at 390px');
-  await page.getByRole('button',{name:'Editar búsqueda'}).click();
+  await (await managementAction('Editar búsqueda')).click();
   assert.equal(await page.locator('#periodDialog').evaluate(dialog=>dialog.scrollWidth<=dialog.clientWidth),true);
   await page.locator('#periodDialog [data-close]').click();
-  await page.getByRole('button',{name:'Editar vivienda'}).click();
+  await (await managementAction('Editar vivienda')).click();
   const housingForm=page.locator('#newPropertyForm');
   assert.equal(await housingForm.locator('[name="idealistaUrl"]').isVisible(),true);
   assert.equal(await housingForm.locator('[name="idealistaUrl"]').isEditable(),true,'imported chats do not lock the housing URL');
@@ -1038,11 +1101,11 @@ try {
   await page.getByRole('button',{name:/Elegir a Nueva inquilina y cerrar búsqueda/}).click();
   await page.getByRole('button',{name:'Confirmar cierre'}).click();
   await page.locator('#closePeriodDialog').waitFor({state:'hidden'});
-  await page.getByRole('button',{name:'Editar vivienda'}).click();
+  await (await managementAction('Editar vivienda')).click();
   await housingForm.locator('[name="idealistaUrl"]').fill('');
   await page.getByRole('button',{name:'Guardar cambios'}).click();
   await page.locator('#propertyDialog').waitFor({state:'hidden'});
-  await page.getByRole('button',{name:'Nueva búsqueda'}).click();
+  await (await managementAction('Nueva búsqueda')).click();
   assert.equal(await page.locator('#periodForm [name="idealistaUrl"]').inputValue(),'','cleared default does not reuse archived listing');
   await page.getByRole('button',{name:'Crear búsqueda'}).click();
   await page.locator('#periodDialog').waitFor({state:'hidden'});
@@ -1062,7 +1125,7 @@ try {
   await rioCard.click();
   await count(0);
   assert.equal(new URL(page.url()).searchParams.get('propertyId'),rioId);
-  assert.match(await page.locator('#propertyTitle').innerText(),/Ático Río/);
+  assert.match(await selectedPropertyName(),/Ático Río/);
   await page.goBack({waitUntil:'networkidle'});
   await page.getByRole('heading',{name:'Mis viviendas'}).waitFor();
   assert.equal(new URL(page.url()).searchParams.has('propertyId'),false,'browser back returns to overview');
@@ -1072,7 +1135,7 @@ try {
   await page.locator('#newPropertyForm [name="rentalSince"]').fill('2026-09-24');
   await page.getByRole('button',{name:'Guardar vivienda'}).click();
   await page.locator('#propertyDialog').waitFor({state:'hidden'});
-  await page.locator('#propertyTitle').getByText(/Casa Centro/).waitFor();
+  assert.match(await selectedPropertyName(),/Casa Centro/);
   await count(0);
   const centroId=new URL(page.url()).searchParams.get('propertyId');
   assert.ok(centroId&&centroId!==rioId);
@@ -1098,7 +1161,7 @@ try {
   await page.getByRole('button',{name:'Guardar interesado'}).click();
   await page.locator('#applicantDialog').waitFor({state:'hidden'});
   await count(1);
-  await page.getByRole('button',{name:'Editar vivienda'}).click();
+  await (await managementAction('Editar vivienda')).click();
   assert.equal(await page.locator('#deleteProperty').isVisible(),true);
   await page.locator('#deleteProperty').click();
   await page.locator('#deletePropertyReview').getByText(/Casa Centro/).waitFor();
@@ -1135,7 +1198,7 @@ try {
   await page.locator('#detailNotes').waitFor();
   assert.equal(await page.locator('#detailNotes').inputValue(),'Dato privado recuperable');
   await page.getByRole('button',{name:'Cerrar detalle'}).click();
-  await page.getByRole('button',{name:'Editar vivienda'}).click();
+  await (await managementAction('Editar vivienda')).click();
   await page.locator('#deleteProperty').click();
   await page.locator('#confirmDeleteProperty').click();
   await page.getByRole('heading',{name:'Mis viviendas'}).waitFor();
@@ -1169,6 +1232,13 @@ try {
   await statePage.goto(baseUrl,{waitUntil:'networkidle'});
   await statePage.getByText('Aún no hay viviendas. Añade la primera para empezar.').waitFor();
   assert.equal(await statePage.locator('.home-card').count(),0);
+  await statePage.evaluate(()=>sessionStorage.setItem('moradaWorkspaceContext',new URL('/?propertyId=removed',location.href).href));
+  await statePage.reload({waitUntil:'networkidle'});
+  assert.equal(new URL(await statePage.locator('#navInterested').getAttribute('href'),baseUrl).searchParams.has('propertyId'),false,
+    'empty active housing list clears a stale Interested workspace link');
+  await statePage.locator('#navInterested').click();
+  await statePage.getByRole('heading',{name:'Mis viviendas'}).waitFor();
+  assert.equal(await statePage.locator('#workspaceView').isVisible(),false,'stale Interested link returns to home when no housing remains');
   homeMode='error';
   await statePage.reload({waitUntil:'networkidle'});
   await statePage.getByText(/Temporalmente no disponible/).waitFor();

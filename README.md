@@ -4,19 +4,19 @@
 
 ## Empezar
 
-En **Mis viviendas**, pulsa **Añadir vivienda**. Escribe un nombre reconocible, la fecha desde la que buscas inquilino y, si quieres, la dirección, el alquiler y la URL del anuncio de Idealista. La URL es opcional: sin ella también puedes crear interesados manualmente.
+En **Mis viviendas**, pulsa **Añadir vivienda**. Desde el espacio de trabajo también puedes elegir **Gestionar → Añadir vivienda**. Escribe un nombre reconocible, la fecha desde la que buscas inquilino y, si quieres, la dirección, el alquiler y la URL del anuncio de Idealista. La URL es opcional: sin ella también puedes crear interesados manualmente.
 
 Para traer conversaciones necesitas **Google Chrome en macOS**, con tu sesión de Idealista abierta en la página de conversaciones y usando el mismo perfil de Chrome. La primera vez activa **Ver → Desarrollador → Permitir JavaScript desde eventos de Apple**. La aplicación lee las conversaciones para organizarlas; no envía respuestas.
 
 ## Viviendas y búsquedas
 
-Alterna entre **Cuadrícula** y **Lista** en Mis viviendas. Abre una vivienda para ver sus búsquedas e interesados, o usa **Editar vivienda** para cambiar su nombre o dirección.
+Alterna entre **Cuadrícula** y **Lista** en Mis viviendas. Abre una vivienda para ver sus búsquedas e interesados, o elige **Gestionar → Editar vivienda** para cambiar su nombre o dirección.
 
 Cada vivienda tiene una búsqueda activa, con fecha de inicio, alquiler y URL del anuncio. Desde **Editar búsqueda** puedes corregir esos datos. Cuando hayas decidido, abre la ficha de la persona elegida y pulsa **Elegir inquilino y cerrar búsqueda**. La búsqueda queda en el histórico, con sus interesados, conversaciones, favoritos, descartes y notas, para consultarla sin mezclarla con la siguiente.
 
 Para volver a anunciar la misma vivienda, pulsa **Nueva búsqueda**. Indica una nueva fecha, alquiler y, si corresponde, URL: empieza con una lista distinta y conserva el histórico anterior separado.
 
-Desde **Editar vivienda** puedes eliminar una vivienda. Aparecerá en **Eliminadas** y podrás restaurarla. **Eliminar definitivamente** pide confirmación y la borra de la aplicación junto con sus búsquedas, interesados, conversaciones y notas; las copias y exportaciones que ya existieran no se alteran.
+Desde **Gestionar → Editar vivienda** puedes eliminar una vivienda. Aparecerá en **Eliminadas** y podrás restaurarla. **Eliminar definitivamente** pide confirmación y la borra de la aplicación junto con sus búsquedas, interesados, conversaciones y notas; las copias y exportaciones que ya existieran no se alteran.
 
 ## Interesados y conversaciones
 
@@ -36,11 +36,11 @@ Puedes descargar una visita individual o el rango visible, con los filtros aplic
 
 ### Sincronización
 
-Para incorporar conversaciones, pulsa **Sincronizar datos desde Idealista** en la búsqueda abierta. La primera sincronización hace una revisión completa. Las siguientes suelen ser rápidas: al encontrar cinco chats conocidos seguidos sin cambios, deja de revisar los anteriores. Esa regla tiene en cuenta la conversación, incluidos mensajes enviados y recibidos, pero es una optimización: no garantiza que se hayan leído siempre todos los chats disponibles. Usa **Sincronización completa** cuando quieras revisarlos todos.
+Para incorporar conversaciones, pulsa **Sincronizar** en la búsqueda abierta. La primera sincronización hace una revisión completa. Las siguientes suelen ser rápidas: al encontrar cinco chats conocidos seguidos sin cambios, deja de revisar los anteriores. Esa regla tiene en cuenta la conversación, incluidos mensajes enviados y recibidos, pero es una optimización: no garantiza que se hayan leído siempre todos los chats disponibles. Para volver a revisar todos los chats, abre la flecha junto a **Sincronizar** (**Opciones de sincronización**) y elige **Sincronización completa**.
 
 Cada conversación se conserva una sola vez dentro de su búsqueda. Si varios chats parecen pertenecer a la misma persona, siguen siendo conversaciones distintas y no se unen automáticamente.
 
-**Actualizar** solo vuelve a mostrar los datos ya guardados. No abre Chrome ni añade conversaciones nuevas.
+**Recargar listado**, junto a los resultados, solo vuelve a mostrar los datos ya guardados. No abre Chrome ni añade conversaciones nuevas.
 
 Las etiquetas **Nuevo** y **Nuevo mensaje** permanecen hasta que abres la ficha correspondiente, incluso tras recargar la página. **Pendiente de responder**, en cambio, depende de quién envió el último mensaje comprobable: no desaparece al abrir la ficha y cambia cuando la secuencia de mensajes indica otro remitente.
 
