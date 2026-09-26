@@ -729,6 +729,12 @@ try {
   await page.locator('#visitDialog').waitFor({state:'hidden'});
   await page.locator('#detailBody').getByText(/15 oct.*10:00/i).waitFor();
   await page.getByRole('button',{name:'Programar visita'}).click();
+  await visitForm.locator('[name="startLocal"]').fill('2026-10-15T10:15');
+  await page.locator('#visitAgendaPreview .is-conflict').getByText(/Piso de prueba/).waitFor();
+  assert.equal(await page.locator('#visitAgendaPreview .is-travel-margin').count(),0,
+    'visits within one property use overlap without the travel margin');
+  await page.locator('#visitDialog [data-close]').click();
+  await page.getByRole('button',{name:'Programar visita'}).click();
   await visitForm.locator('[name="startLocal"]').fill('2026-10-25T02:30');
   await visitForm.locator('[name="utcOffsetMinutes"]').selectOption('60');
   await page.getByRole('button',{name:'Guardar visita'}).click();
@@ -747,15 +753,53 @@ try {
   const albaApplicantId=await page.evaluate(async ({propertyId,periodId})=>{const result=await fetch(`/api/properties/${propertyId}/periods/${periodId}/applicants?status=all`).then(response=>response.json());return result.items.find(item=>item.name==='Alba').applicant_id;},{propertyId:originalPropertyId,periodId:originalPeriodId});
   const crossMidnight=await page.request.post(`${baseUrl}/api/properties/${originalPropertyId}/periods/${originalPeriodId}/applicants/${encodeURIComponent(albaApplicantId)}/visits`,{data:{startLocal:'2026-09-30T23:45',durationMinutes:120,status:'confirmed'}});
   assert.equal(crossMidnight.status(),201,'synthetic cross-midnight visit is created for calendar rendering');
+  const nextDay=await page.request.post(`${baseUrl}/api/properties/${originalPropertyId}/periods/${originalPeriodId}/applicants/${encodeURIComponent(albaApplicantId)}/visits`,
+    {data:{startLocal:'2026-10-16T00:15',durationMinutes:30,status:'confirmed'}});
+  assert.equal(nextDay.status(),201,'next-day visit supports overnight scheduling preview');
+  assert.equal((await page.request.patch(`${baseUrl}/api/calendar/settings`,{data:{travelBufferMinutes:30}})).status(),200);
   await page.getByRole('button',{name:'Cerrar detalle'}).click();
   await page.locator('#propertySelect').selectOption(olivarId);await count(1);
   await page.getByRole('button',{name:'Ver ficha de Luisa Manual'}).click();
+  let failPreviewSettings=true;
+  const previewSettings=url=>new URL(url).pathname==='/api/calendar/settings';
+  const failSettingsOnce=async route=>{
+    if(route.request().method()==='GET'&&failPreviewSettings){failPreviewSettings=false;
+      await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Disponibilidad no disponible'})});}
+    else await route.continue();
+  };
+  await page.route(previewSettings,failSettingsOnce);
   await page.getByRole('button',{name:'Programar visita'}).click();
+  await page.locator('#visitAgendaState').getByText(/Disponibilidad no disponible/).waitFor();
+  assert.match(await page.locator('#visitPreviewConflict').innerText(),/disponibilidad no está comprobada/i,
+    'availability fetch failure does not present a false all-clear');
+  await page.unroute(previewSettings,failSettingsOnce);
+  await visitForm.locator('[name="startLocal"]').fill('2026-10-01T00:30');
+  await page.locator('#visitAgendaPreview .is-conflict').getByText(/Piso de prueba/).waitFor();
+  assert.match(await page.locator('#visitAgendaPreview').innerText(),/30 sept.*23:45/i,
+    'the chosen day shows an appointment continuing from the prior day');
+  await visitForm.locator('[name="startLocal"]').fill('2026-10-15T23:55');
+  await page.locator('#visitAgendaPreview .is-conflict .visit-preview-nearby').getByText(/fuera de este día/).waitFor();
+  assert.match(await page.locator('#visitAgendaPreview').innerText(),/16 oct.*00:15/i,
+    'an overnight candidate includes its next-day blocker outside the day agenda');
+  await visitForm.locator('[name="startLocal"]').fill('2026-10-15T10:45');
+  await page.locator('#visitAgendaPreview .is-travel-margin').getByText(/Piso de prueba/).waitFor();
+  assert.match(await page.locator('#visitTravelMargin').innerText(),/30 min/);
+  assert.match(await page.locator('#visitPreviewConflict').innerText(),/margen entre viviendas/);
   await visitForm.locator('[name="startLocal"]').fill('2026-10-15T10:20');
+  await page.locator('#visitAgendaPreview .is-conflict').getByText(/Piso de prueba/).waitFor();
+  await page.screenshot({path:path.join(screenshots,'visit-scheduler-desktop.png')});
+  for(const width of [900,390]){
+    await page.setViewportSize({width,height:844});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,
+      `visit scheduler fits at ${width}px`);
+    if(width===390)await page.screenshot({path:path.join(screenshots,'visit-scheduler-mobile.png')});
+  }
+  await page.setViewportSize({width:1440,height:980});
   await page.getByRole('button',{name:'Guardar visita'}).click();
   await visitForm.getByText('La visita coincide con otra cita').waitFor();
   assert.match(await visitForm.innerText(),/Piso de prueba/,'the conflict names the other property even while viewing Olivar');
   await visitForm.locator('[name="startLocal"]').fill('2026-10-15T11:00');
+  await page.locator('#visitPreviewConflict').getByText(/Sin coincidencias detectadas/).waitFor();
   assert.equal(await page.getByRole('button',{name:'Guardar de todos modos'}).count(),0,
     'editing the time clears the stale conflict acknowledgement');
   await page.getByRole('button',{name:'Guardar visita'}).click();
@@ -765,6 +809,30 @@ try {
   assert.equal(safeVisitList.visits[0].startsAt,'2026-10-15T09:00:00.000Z',
     'the revised 11:00 time was saved rather than the stale conflicting 10:20 time');
   const visitPatchPath=`/api/visits/${safeVisitList.visits[0].id}`;
+  await page.getByRole('button',{name:/Editar visita del/i}).click();
+  await page.locator('#visitAgendaState').getByText(/cita en este día/).waitFor();
+  assert.equal(await page.locator(`#visitAgendaPreview [data-visit-id="${safeVisitList.visits[0].id}"]`).count(),0,
+    'editing excludes the visit itself from availability');
+  let releaseOldZone,oldZoneHeld;
+  const oldZoneHeldPromise=new Promise(resolve=>{oldZoneHeld=resolve;});
+  const delayedOldZone=url=>new URL(url).pathname==='/api/visits'&&new URL(url).searchParams.get('timezone')==='Pacific/Kiritimati';
+  await page.route(delayedOldZone,async route=>{await new Promise(resolve=>{releaseOldZone=resolve;oldZoneHeld();});await route.continue();});
+  await page.locator('#visitTimezone').selectOption('Pacific/Kiritimati');
+  await oldZoneHeldPromise;
+  await page.waitForFunction(()=>document.querySelector('#visitAgendaZone')?.textContent.includes('Pacific/Kiritimati'));
+  await page.locator('#visitTimezone').selectOption('Pacific/Pago_Pago');
+  assert.equal(await visitForm.locator('[name="startLocal"]').inputValue(),'2026-10-14T22:00',
+    'zone change keeps the UTC instant while moving the chosen civil day');
+  await page.locator('#visitAgendaZone').getByText(/2026-10-14 · Pacific\/Pago_Pago/).waitFor();
+  await page.locator('#visitAgendaPreview').getByText('Piso de prueba').waitFor();
+  releaseOldZone();
+  await page.unroute(delayedOldZone);
+  await page.waitForTimeout(50);
+  assert.match(await page.locator('#visitAgendaZone').innerText(),/2026-10-14 · Pacific\/Pago_Pago/,
+    'late old-zone response cannot replace the selected day');
+  await page.locator('#visitTimezone').selectOption('Europe/Madrid');
+  assert.equal(await visitForm.locator('[name="startLocal"]').inputValue(),'2026-10-15T11:00');
+  await page.locator('#visitDialog [data-close]').click();
   const delayedConflictMatch=url=>new URL(url).pathname===visitPatchPath;
   let releaseDelayedConflict;
   const delayedConflictRoute=async route=>{
@@ -808,6 +876,11 @@ try {
   await page.getByRole('button',{name:'Guardar de todos modos'}).click();
   await page.locator('#visitDialog').waitFor({state:'hidden'});
   await page.locator('#detailBody').getByText(/15 oct.*10:20/i).waitFor();
+  const cancelledCreate=await page.request.post(`${baseUrl}/api/properties/${originalPropertyId}/periods/${originalPeriodId}/applicants/${encodeURIComponent(albaApplicantId)}/visits`,
+    {data:{startLocal:'2026-10-15T16:00',durationMinutes:30,status:'pending_confirmation'}});
+  assert.equal(cancelledCreate.status(),201);
+  const cancelledVisit=await cancelledCreate.json();
+  assert.equal((await page.request.patch(`${baseUrl}/api/visits/${cancelledVisit.id}`,{data:{status:'cancelled'}})).status(),200);
   await page.getByRole('button',{name:'Cerrar detalle'}).click();
   await page.goto(`${baseUrl}/?view=calendar`,{waitUntil:'networkidle'});
   await page.getByRole('heading',{name:'Calendario de visitas'}).waitFor();
@@ -825,6 +898,12 @@ try {
   assert.match(await page.locator('#agendaItems').innerText(),/30 sept.*23:45.*en curso/i,'an overnight visit identifies its prior-day start in the next-day agenda');
   await page.getByRole('button',{name:/15 de octubre de 2026/}).click();
   await page.locator('.agenda-visit.is-confirmed').waitFor();
+  assert.equal(await page.locator('#calendarStatus').inputValue(),'not_cancelled');
+  assert.doesNotMatch(await page.locator('#agendaItems').innerText(),/Cancelada/,
+    'ordinary calendar hides cancelled history');
+  const ordinaryIcs=await page.request.get(new URL(await page.locator('#calendarExport').getAttribute('href'),baseUrl).href);
+  assert.equal(ordinaryIcs.status(),200);
+  assert.doesNotMatch(await ordinaryIcs.text(),/STATUS:CANCELLED/,'ordinary calendar export also omits cancelled history');
   await page.screenshot({path:path.join(screenshots,'calendar-confirmed.png')});
   const visitEmphasis=await page.evaluate(()=>{
     const weight=node=>Number.parseInt(getComputedStyle(node).fontWeight,10);
@@ -838,6 +917,14 @@ try {
   });
   assert.ok(visitEmphasis.confirmedGrid>visitEmphasis.pendingGrid&&visitEmphasis.confirmedAgenda>visitEmphasis.pendingAgenda,
     'confirmed visits are visually emphasized over pending visits in the grid and agenda');
+  await page.locator('#calendarStatus').selectOption('');
+  await page.locator('#agendaItems').getByText('Cancelada').waitFor();
+  const allIcs=await page.request.get(new URL(await page.locator('#calendarExport').getAttribute('href'),baseUrl).href);
+  assert.match(await allIcs.text(),/STATUS:CANCELLED/,'explicit Todos export includes cancelled history');
+  await page.locator('#calendarStatus').selectOption('cancelled');
+  await page.screenshot({path:path.join(screenshots,'calendar-cancelled.png')});
+  assert.equal(await page.locator('#agendaItems .agenda-visit').count(),1,'Canceladas reveals only cancelled visits');
+  await page.locator('#calendarStatus').selectOption('not_cancelled');
   await page.locator('#calendarProperty').selectOption(originalPropertyId);
   await page.locator('#agendaItems').getByText('Alba').waitFor();
   assert.equal(await page.locator('#agendaItems').getByText('Luisa Manual').count(),0,'property filter hides the other visit from the agenda');
@@ -880,7 +967,7 @@ try {
   await newYorkPage.goto(`${baseUrl}/?view=calendar`,{waitUntil:'networkidle'});
   await newYorkPage.getByRole('button',{name:'Mes siguiente'}).click();
   await newYorkPage.getByRole('button',{name:/15 de octubre de 2026/}).click();
-  await newYorkPage.locator('#agendaItems').getByText('Alba').waitFor();
+  await newYorkPage.locator('#agendaItems').getByText('Alba').first().waitFor();
   assert.match(await newYorkPage.locator('#agendaItems').innerText(),/04:00/,'the same UTC appointment is displayed in New York time');
   await newYorkPage.locator('#calendarTimezone').selectOption('Europe/Madrid');
   assert.match(await newYorkPage.locator('#agendaItems').innerText(),/10:00/,'changing calendar zone changes only the view of the UTC appointment');

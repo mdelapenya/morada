@@ -262,6 +262,76 @@ function updateVisitOffsets(preferredInstant=null){
  else if(candidates.some(candidate=>String(candidate.utcOffsetMinutes)===previous))select.value=previous;
  return candidates;
 }
+let visitPreviewKey=null,visitPreviewRows=null,visitPreviewMargin=0,visitPreviewPending=false,visitPreviewGeneration=0;
+const blockingVisit=visit=>visit.status==='pending_confirmation'||visit.status==='confirmed';
+function visitPreviewCandidate(){
+ const fields=el('visitForm').elements;
+ let candidates=[];try{candidates=localTimeCandidates(fields.startLocal.value,fields.timezone.value);}catch{}
+ const selected=candidates.length===1?candidates[0]:
+  candidates.find(item=>String(item.utcOffsetMinutes)===fields.utcOffsetMinutes.value);
+ const duration=Number(fields.durationMinutes.value);
+ if(!selected||!Number.isInteger(duration)||duration<5||duration>480||!blockingVisit({status:fields.status.value}))return null;
+ const start=Date.parse(selected.instant);
+ return {start,end:start+duration*60000};
+}
+function renderVisitPreview(){
+ const form=el('visitForm'),day=form.elements.startLocal.value.slice(0,10),timezone=form.elements.timezone.value;
+ const container=el('visitAgendaPreview'),state=el('visitAgendaState'),warning=el('visitPreviewConflict');
+ container.replaceChildren();warning.textContent='';
+ if(!visitPreviewRows)return;
+ const candidate=visitPreviewCandidate(),bounds=civilDayBounds(day,timezone),margin=visitPreviewMargin*60000;
+ const active=visitPreviewRows.filter(visit=>blockingVisit(visit)&&visit.id!==visitEditing?.id);
+ const overlap=visit=>Date.parse(visit.startsAt)<candidate.end&&Date.parse(visit.endsAt)>candidate.start;
+ const collision=visit=>candidate&&(visit.propertyId===visitContext.propertyId?overlap(visit):
+  Date.parse(visit.startsAt)<candidate.end+margin&&Date.parse(visit.endsAt)>candidate.start-margin);
+ const onDay=visit=>bounds.startsAt<bounds.endsAt&&visit.startsAt<bounds.endsAt&&visit.endsAt>bounds.startsAt;
+ const displayed=active.filter(visit=>onDay(visit)||collision(visit));
+ const time=new Intl.DateTimeFormat('es-ES',{timeZone:timezone,day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+ for(const visit of displayed){
+  const conflict=collision(visit),travel=conflict&&!overlap(visit);
+  const row=node('div',undefined,`visit-preview-blocker${conflict?travel?' is-travel-margin':' is-conflict':''}`);
+  row.dataset.visitId=visit.id;
+  row.append(node('strong',visit.propertyTitle),node('p',`${time.format(new Date(visit.startsAt))} – ${time.format(new Date(visit.endsAt))}`,'visit-preview-time'),
+   node('span',visitStatus[visit.status]||visit.status,'visit-status'));
+  if(!onDay(visit))row.append(node('p','Cita cercana fuera de este día','visit-preview-nearby'));
+  if(travel)row.append(node('p',`Coincide con el margen de ${visitPreviewMargin} min entre viviendas`,'visit-preview-nearby'));
+  container.append(row);
+ }
+ const dayCount=active.filter(onDay).length;
+ state.textContent=dayCount?`${dayCount} ${dayCount===1?'cita':'citas'} en este día.`:'No hay otras citas en este día.';
+ if(!candidate){warning.textContent='Elige una fecha y hora válidas para comprobar coincidencias.';return;}
+ const conflicts=active.filter(collision),overlaps=conflicts.filter(overlap).length,travel=conflicts.length-overlaps;
+ warning.textContent=conflicts.length?`${overlaps?`${overlaps} ${overlaps===1?'cita coincide':'citas coinciden'} con este horario. `:''}${travel?`${travel} ${travel===1?'cita afecta':'citas afectan'} al margen entre viviendas.`:''}`:
+  'Sin coincidencias detectadas. Se comprobará de nuevo al guardar.';
+}
+function refreshVisitPreview(){
+ if(!el('visitDialog').open)return;
+ const fields=el('visitForm').elements,timezone=fields.timezone.value,day=fields.startLocal.value.slice(0,10);
+ el('visitAgendaZone').textContent=day&&timezone?`${day} · ${timezone}`:timezone;
+ let from,to;try{from=addCivilDays(day,-1);to=addCivilDays(day,1);}catch{}
+ if(!from||!to){visitPreviewGeneration++;visitPreviewKey=null;visitPreviewRows=null;visitPreviewPending=false;
+  el('visitAgendaPreview').replaceChildren();el('visitAgendaState').textContent='Elige una fecha válida para ver las citas.';
+  el('visitPreviewConflict').textContent='';el('visitTravelMargin').textContent='';return;}
+ const key=`${day}|${timezone}`;
+ if(key===visitPreviewKey){if(visitPreviewRows){renderVisitPreview();return;}if(visitPreviewPending)return;}
+ visitPreviewKey=key;visitPreviewRows=null;visitPreviewPending=true;
+ const generation=++visitPreviewGeneration;
+ el('visitAgendaPreview').replaceChildren();el('visitAgendaState').textContent='Cargando citas de todas las viviendas…';
+ el('visitPreviewConflict').textContent='';el('visitTravelMargin').textContent='Comprobando margen entre viviendas…';
+ const query=new URLSearchParams({from,to,timezone});
+ Promise.all([api(`/api/visits?${query}`),api('/api/calendar/settings')]).then(([result,settings])=>{
+  if(!el('visitDialog').open||generation!==visitPreviewGeneration||key!==visitPreviewKey)return;
+  visitPreviewPending=false;visitPreviewRows=result.visits||[];visitPreviewMargin=settings.travelBufferMinutes;
+  el('visitTravelMargin').textContent=`Margen entre viviendas: ${visitPreviewMargin} min.`;
+  renderVisitPreview();
+ }).catch(error=>{
+  if(!el('visitDialog').open||generation!==visitPreviewGeneration||key!==visitPreviewKey)return;
+  visitPreviewPending=false;visitPreviewRows=null;el('visitAgendaPreview').replaceChildren();
+  el('visitAgendaState').textContent=`No se pudieron consultar las citas: ${error.message}`;
+  el('visitPreviewConflict').textContent='La disponibilidad no está comprobada. Se verificará al guardar.';
+  el('visitTravelMargin').textContent='Margen no disponible.';
+ });
+}
 function openVisitDialog(context,visit=null){
  if(!context.editable)return;
  visitContext=context;visitEditing=visit;
@@ -276,10 +346,14 @@ function openVisitDialog(context,visit=null){
  el('visitCancel').hidden=!visit;
  updateVisitOffsets(visit?.startsAt);
  el('visitDialog').showModal();
+ visitPreviewKey=null;visitPreviewRows=null;visitPreviewPending=false;refreshVisitPreview();
 }
 async function renderApplicantVisits(item,id,body,context){if(!context.propertyId||!context.periodId)return;const section=node('section',undefined,'applicant-visits');section.append(node('h3','Visitas','detail-label'));const list=node('div',undefined,'visit-list');section.append(list);if(context.editable)section.append(actionButton('Programar visita','Programar visita',()=>openVisitDialog({...context,name:item.name,propertyTitle:property?.title||''})));
  body.append(section);try{const result=await api(visitUrl(context.propertyId,context.periodId,item.applicant_id||id));if(currentDetail!==id||!el('detail').open)return;const visits=result.visits||[];if(!visits.length)list.append(node('p','Aún no hay visitas programadas.','integrity'));for(const visit of visits){const row=node('div',undefined,'visit-row');const description=node('div');description.append(node('strong',`${visitWhen(visit.startsAt,viewZone)} (${viewZone})`),node('span',visitStatus[visit.status]||visit.status,'visit-status'));row.append(description);if(context.editable&&visit.status!=='cancelled'&&visit.status!=='completed'){const actions=node('div');actions.append(actionButton('Editar',`Editar visita del ${visitWhen(visit.startsAt,viewZone)}`,()=>openVisitDialog({...context,name:item.name,propertyTitle:property?.title||''},visit)),actionButton('Realizada',`Marcar realizada la visita del ${visitWhen(visit.startsAt,viewZone)}`,async()=>{await api(`/api/visits/${encodeURIComponent(visit.id)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'completed'})});detail(id);toast('Visita marcada como realizada.');}));row.append(actions);}list.append(row);}}catch(e){list.append(node('p',e.message,'integrity'));}}
 el('visitForm').elements.startLocal.oninput=()=>updateVisitOffsets();
+el('visitDialog').addEventListener('close',()=>{visitPreviewGeneration++;visitPreviewKey=null;visitPreviewRows=null;visitPreviewPending=false;});
+el('visitForm').addEventListener('input',event=>{if(event.target!==el('visitTimezone'))refreshVisitPreview();});
+el('visitForm').addEventListener('change',event=>{if(event.target!==el('visitTimezone'))refreshVisitPreview();});
 el('visitTimezone').onchange=()=>{
  const form=el('visitForm'),newZone=form.elements.timezone.value,oldZone=visitFormZone;
  let instant=null;
@@ -294,6 +368,7 @@ el('visitTimezone').onchange=()=>{
  updateVisitOffsets(instant);
  el('visitDialogContext').textContent=`${visitContext.name} · ${visitContext.propertyTitle} · ${newZone}`;
  form.querySelector('.form-error').textContent=instant?'':'Elige una fecha y hora válida para esta zona.';
+ refreshVisitPreview();
 };
 el('visitCancel').onclick=async()=>{if(!visitEditing)return;try{await api(`/api/visits/${encodeURIComponent(visitEditing.id)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'cancelled'})});el('visitDialog').close();if(currentDetail)detail(currentDetail);toast('Visita cancelada.');}catch(e){el('visitForm').querySelector('.form-error').textContent=e.message;}};
 async function saveVisitPayload(payload){
@@ -397,7 +472,8 @@ function calendarQuery(halo=0){
 }
 function calendarVisible(){
  const propertyId=el('calendarProperty').value,statusValue=el('calendarStatus').value;
- return calendarVisits.filter(visit=>(!propertyId||visit.propertyId===propertyId)&&(!statusValue||visit.status===statusValue));
+ return calendarVisits.filter(visit=>(!propertyId||visit.propertyId===propertyId)&&
+  (statusValue==='not_cancelled'?visit.status!=='cancelled':!statusValue||visit.status===statusValue));
 }
 function visitOnDay(visit,day){
  const bounds=dayBounds(day);

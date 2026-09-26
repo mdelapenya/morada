@@ -28,7 +28,9 @@ Cuando una persona quiera ver la vivienda, abre su ficha y pulsa **Programar vis
 
 El calendario adopta inicialmente la zona horaria del navegador y permite elegir otra zona IANA visible. Las nuevas visitas usan la zona seleccionada y, al editar una existente, se usa su zona guardada. Cambiar la zona de visualización no altera el instante de la visita: solo cambia cómo se muestra. En los cambios de hora, Morada rechaza una hora que no existe y, cuando una hora ocurre dos veces, pide escoger la ocurrencia correcta. Una búsqueda no se puede cerrar mientras tenga visitas pendientes o confirmadas que aún no hayan terminado.
 
-Abre **Calendario** desde Mis viviendas o desde el espacio de trabajo para consultar la agenda conjunta de todas las viviendas. Puedes filtrar por vivienda o estado; esos filtros solo cambian lo que ves y nunca excluyen citas de la comprobación de solapes al guardar. Si hay una coincidencia, Morada la muestra y permite guardar de todos modos de forma explícita. El margen de desplazamiento se configura para todo el calendario entre 0 y 180 minutos; se aplica solo entre viviendas diferentes.
+Abre **Calendario** desde Mis viviendas o desde el espacio de trabajo para consultar la agenda conjunta de todas las viviendas. Por defecto se muestran las visitas **No canceladas**; el filtro **Estado** permite elegir **Todos los estados** o **Cancelada** para consultar también el historial. Puedes filtrar por vivienda o estado: esos filtros solo cambian lo que ves y no excluyen citas de las comprobaciones al guardar.
+
+Al programar o reprogramar una visita, el formulario muestra la agenda del día seleccionado para todas las viviendas, en la zona horaria de la visita. Morada advierte si coincide con otra cita y tiene en cuenta el margen de desplazamiento configurado para el calendario, entre 0 y 180 minutos y solo entre viviendas distintas. Puedes confirmar explícitamente que quieres guardar pese al aviso; Morada vuelve a comprobar las coincidencias al guardar.
 
 No se asignan responsables a las visitas, no hace falta una cuenta de Google y no se envían invitaciones externas.
 

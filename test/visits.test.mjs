@@ -134,16 +134,20 @@ test('range overlap, filters, soft deletion, restoration and purge',t=>{
   const {db,make}=setup(t),a=make('Primera'),b=make('Segunda');
   const first=createVisit(db,a.propertyId,a.periodId,a.applicantId,at('2026-09-23T23:45',60));
   const second=createVisit(db,b.propertyId,b.periodId,b.applicantId,at('2026-09-24T11:00'));
-  assert.deepEqual(listVisits(db,range()).map(v=>v.id),[first.id,second.id]);
+  const cancelled=createVisit(db,a.propertyId,a.periodId,a.applicantId,
+    at('2026-09-24T12:00',30,{status:'cancelled'}));
+  assert.deepEqual(listVisits(db,range()).map(v=>v.id),[first.id,second.id,cancelled.id]);
+  assert.deepEqual(listVisits(db,range('2026-09-24','2026-09-24',{status:'not_cancelled'})).map(v=>v.id),
+    [first.id,second.id]);
   assert.equal(listVisits(db,range('2026-09-24','2026-09-24',{propertyId:b.propertyId})).length,1);
-  assert.equal(listVisits(db,range('2026-09-24','2026-09-24',{status:'cancelled'})).length,0);
+  assert.deepEqual(listVisits(db,range('2026-09-24','2026-09-24',{status:'cancelled'})).map(v=>v.id),[cancelled.id]);
   assert.throws(()=>listVisits(db,range('2026-01-01','2027-01-02')));
   assert.throws(()=>listVisits(db,range('2026-09-25','2026-09-24')));
   deleteProperty(db,a.propertyId);
   assert.equal(listVisits(db,range()).length,1);
   assert.equal(getVisit(db,first.id),null);
   restoreProperty(db,a.propertyId);
-  assert.equal(listVisits(db,range()).length,2);
+  assert.equal(listVisits(db,range()).length,3);
   deleteProperty(db,a.propertyId);
   purgeProperty(db,a.propertyId);
   assert.equal(db.prepare('SELECT count(*) AS n FROM visits WHERE id=?').get(first.id).n,0);
@@ -181,8 +185,16 @@ test('HTTP routes validate writes, expose settings and export private ICS',async
     {timezone:'UTC'}))});
   assert.equal(response.status,201);
   assert.equal((await response.json()).timezone,'UTC');
-  assert.equal((await (await request(scoped)).json()).visits.length,1);
-  assert.equal((await (await request(`/api/visits?from=2026-09-24&to=2026-09-24`)).json()).visits.length,2);
+  response=await request(scoped,{...json,body:JSON.stringify(at('2026-09-24T14:00',30,
+    {status:'cancelled'}))});
+  assert.equal(response.status,201);
+  const cancelled=await response.json();
+  assert.equal((await (await request(scoped)).json()).visits.length,2);
+  assert.equal((await (await request(`/api/visits?from=2026-09-24&to=2026-09-24`)).json()).visits.length,3,
+    'an omitted status preserves calendar history');
+  assert.equal((await (await request(`/api/visits?from=2026-09-24&to=2026-09-24&status=not_cancelled`)).json()).visits.length,2,
+    'the read-only default-calendar filter excludes cancelled visits');
+  assert.deepEqual((await (await request(`/api/visits?from=2026-09-24&to=2026-09-24&status=cancelled`)).json()).visits.map(visit=>visit.id),[cancelled.id]);
   response=await request(`/api/visits/${created.id}`,{method:'PATCH',headers:json.headers,
     body:JSON.stringify({status:'completed'})});
   assert.equal(response.status,200);
@@ -204,11 +216,19 @@ test('HTTP routes validate writes, expose settings and export private ICS',async
   response=await request('/api/visits.ics?from=2026-09-24&to=2026-09-24');
   assert.equal(response.status,200);
   assert.match(await response.text(),/BEGIN:VCALENDAR/);
+  response=await request('/api/visits.ics?from=2026-09-24&to=2026-09-24&status=not_cancelled');
+  assert.equal(response.status,200);
+  const filteredIcs=await response.text();
+  assert.doesNotMatch(filteredIcs,new RegExp(`visita-${Buffer.from(cancelled.id).toString('base64url')}@morada\\.local`));
+  assert.match(filteredIcs,/STATUS:(?:TENTATIVE|CONFIRMED)/);
   response=await request('/api/visits.ics?from=2026-09-24&to=2026-09-24&timezone=America%2FNew_York');
   assert.equal(response.status,200);
   assert.match(await response.text(),/BEGIN:VCALENDAR/);
   assert.equal((await request('/api/visits?from=bad&to=2026-09-24')).status,400);
   assert.equal((await request('/api/visits?from=2026-09-24&to=2026-09-24&timezone=Nope')).status,400);
+  assert.equal((await request('/api/visits?from=2026-09-24&to=2026-09-24&status=all')).status,400);
+  response=await request(scoped,{...json,body:JSON.stringify(at('2026-09-25T14:00',30,{status:'not_cancelled'}))});
+  assert.equal(response.status,400,'the read-only filter is not a writable visit status');
 });
 
 test('Madrid-only visit table migrates atomically with identity, FKs and indexes intact',t=>{

@@ -67,12 +67,14 @@ export function listVisits(db,params) {
   catch { fail('Rango de fechas no válido'); }
   const propertyId=params.get('propertyId'),status=params.get('status');
   if(propertyId!==null&&!propertyId) fail('Vivienda no válida');
-  if(status!==null&&!STATUSES.has(status)) fail('Estado no válido');
+  if(status!==null&&status!=='not_cancelled'&&!STATUSES.has(status)) fail('Estado no válido');
   if(start===end) return [];
+  const statusClause=status==='not_cancelled'?`AND v.status<>'cancelled'`:
+    status!==null?'AND v.status=?':'';
   return db.prepare(`SELECT ${fields} ${joins} WHERE p.deleted_at IS NULL
     AND v.starts_at<? AND v.ends_at>? ${propertyId!==null?'AND v.property_id=?':''}
-    ${status!==null?'AND v.status=?':''} ORDER BY v.starts_at,v.id`)
-    .all(end,start,...(propertyId!==null?[propertyId]:[]),...(status!==null?[status]:[])).map(visit);
+    ${statusClause} ORDER BY v.starts_at,v.id`)
+    .all(end,start,...(propertyId!==null?[propertyId]:[]),...(status!==null&&status!=='not_cancelled'?[status]:[])).map(visit);
 }
 
 export function getCalendarSettings(db) {
