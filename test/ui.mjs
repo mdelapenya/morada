@@ -18,7 +18,8 @@ const server = createServer(db);
 
 function fixture(id, name, fields, overrides = {}) {
   return {
-    id, name, exportedAt: '2026-09-23T10:00:00.000Z', listedDate: '10:00',
+    id, name, exportedAt: overrides.exportedAt??'2026-09-23T10:00:00.000Z', listedDate: '10:00',
+    referenceDay:overrides.referenceDay,
     properties: [{ url: overrides.propertyUrl ?? 'https://www.idealista.com/inmueble/13579135/' }],
     integrity: { profile: 'completo', history: 'completo', notes: ['Datos de prueba locales.'] },
     profile: { text: `Perfil de ${name}. ${overrides.profileText ?? ''}`, fields },
@@ -30,10 +31,10 @@ const applicants = [
   fixture('101', 'Alba', ['Somos una pareja', 'Hay menores: sí', 'Con mascota', 'Ingresos mensuales del grupo: 2.000 €']),
   fixture('102', 'Bruno', ['1 persona', 'Sin menores', 'Sin mascota', 'Ingreso mensual: 1.000 €'], { message: 'Trabajo en el hospital central.', propertyUrl: 'https://www.idealista.com/inmueble/13579135/' }),
   fixture('103', 'Carmen', ['Somos 3 personas', 'Con mascota', 'Ingresos mensuales del grupo: 3.000 €']),
-  fixture('104', 'Diego', ['Somos 4 personas', 'Sin menores', 'Ingreso mensual: 2.000 €'], { profileText: '<script>window.pwned=true</script>', messages: [
-    { sequence: 1, author: 'Diego', direction: 'received', dateLabel: '23 septiembre', time: '09:59', rawText: '<img src=x onerror=window.pwned=true> Mensaje seguro' },
-    { sequence: 2, author: 'Propietario', direction: 'sent', dateLabel: '23 septiembre', time: '10:00', rawText: 'Respuesta de prueba' },
-    { sequence: 3, author: 'Diego', direction: 'received', dateLabel: '23 septiembre', time: '10:00', rawText: 'Mensaje más reciente' },
+  fixture('104', 'Diego', ['Somos 4 personas', 'Sin menores', 'Ingreso mensual: 2.000 €'], { profileText: '<script>window.pwned=true</script>', referenceDay:'2026-09-25',exportedAt:'2026-09-29T10:00:00.000Z',messages: [
+    { sequence: 1, author: 'Diego', direction: 'received', dateLabel: 'Hoy', messageDate:'2026-09-24',time: '09:59', rawText: '<img src=x onerror=window.pwned=true> Mensaje seguro' },
+    { sequence: 2, author: 'Propietario', direction: 'sent', dateLabel: 'Ayer', time: '10:00', rawText: 'Respuesta de prueba' },
+    { sequence: 3, author: 'Diego', direction: 'received', dateLabel: 'Hoy', messageDate:'2026-09-25',time: '10:00', rawText: 'Mensaje más reciente' },
   ] }),
   fixture('105', 'Elena', [], { profileText: '<b>sin formato HTML</b>' }),
   fixture('106', 'Fabio', ['Somos una pareja', 'Hay menores: sí', 'Sin mascota', 'Ingresos mensuales del grupo: 1.500 €']),
@@ -243,6 +244,11 @@ try {
   assert.equal(await page.evaluate(() => window.pwned), undefined);
   assert.match(await page.getByRole('dialog').innerText(), /<img src=x onerror=window\.pwned=true> Mensaje seguro/);
   assert.equal(await page.locator('#detail .message').count(), 3, 'the detail keeps the stored message count');
+  assert.deepEqual(await page.locator('#detail .message-meta').allTextContents(),[
+    'Diego · 25 de septiembre de 2026 · 10:00',
+    'Propietario · 24 de septiembre de 2026 · 10:00',
+    'Diego · 24 de septiembre de 2026 · 09:59',
+  ],'stored Hoy/Ayer labels use message dates or the snapshot date, never the viewing/import day');
   assert.deepEqual(await page.locator('#detail .message').evaluateAll(messages=>messages.map(message=>({text:message.querySelector('pre').textContent,direction:[...message.classList].find(name=>name==='sent'||name==='received')}))),[
     {text:'Mensaje más reciente',direction:'received'},
     {text:'Respuesta de prueba',direction:'sent'},

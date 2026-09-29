@@ -1,4 +1,5 @@
 import { normalizeTimeZone, localDateTimeParts, localTimeCandidates, civilDayBounds, addCivilDays } from './visit-time.mjs';
+import { formatMessageDate } from './message-date.mjs';
 const el = id => document.getElementById(id);
 const filterIds = ['name','messageQuery','date','reply','pendingReply','children','pets','peopleMin','peopleMax','incomeMin','incomeMax','scope'];
 let status = new URLSearchParams(location.search).get('status') || 'active';
@@ -240,7 +241,7 @@ async function detail(id) {
   renderApplicantVisits(item,id,body,{propertyId:propertyAtStart,periodId:periodAtStart,applicantId:item.applicant_id||id,editable:canEditPeriod()});
   body.append(node('h3','Ficha original','detail-label'),node('div',item.profile?.text??'Este interesado no tiene una ficha disponible.','profile-text'));
   const messages=[...(item.messages||[])].reverse();if(messages.length)body.append(node('h3',`Conversación · ${messages.length} mensajes`,'detail-label'));
-  for(const m of messages){const article=node('article',undefined,`message ${m.direction}`);article.append(node('p',`${m.author} · ${m.dateLabel??'Fecha no indicada'} · ${m.time??''}`,'message-meta'),node('pre',m.rawText));body.append(article);}
+  for(const m of messages){const article=node('article',undefined,`message ${m.direction}`);article.append(node('p',`${m.author} · ${formatMessageDate(m,item)} · ${m.time??''}`,'message-meta'),node('pre',m.rawText));body.append(article);}
   if(item.integrity?.notes?.length)body.append(node('p',item.integrity.notes.join(' '),'integrity'));
   if(periodsReady&&activePeriod()?.status==='open'&&item.attentionRevision&&item.syncAttention&&currentDetail===id&&detailSeq===detailRequestId&&propertyAtStart===selectedPropertyId&&periodAtStart===selectedPeriodId)ackAttention(id,item.attentionRevision,{propertyId:propertyAtStart,periodId:periodAtStart,detailSeq});
  }catch(e){if(detailSeq===detailRequestId&&propertyAtStart===selectedPropertyId&&periodAtStart===selectedPeriodId){el('detailName').textContent='No se pudo cargar la ficha';el('detailBody').append(node('p',e.message,'error'));}}

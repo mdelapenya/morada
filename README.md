@@ -56,6 +56,8 @@ Las etiquetas **Nuevo** y **Nuevo mensaje** permanecen hasta que abres la ficha 
 
 Abre el nombre de un interesado para consultar su ficha, la conversación y las **Notas privadas**. Desde ahí puedes guardar un favorito, descartar a alguien y recuperarlo más tarde desde **Descartados**, o elegir al inquilino y cerrar la búsqueda. Estas acciones solo se guardan en Morada.
 
+La conversación muestra la fecha del mensaje, no el día en que abres la ficha. En chats antiguos, las etiquetas «Hoy» y «Ayer» se interpretan con la fecha de la lectura guardada; si falta esa referencia, Morada indica que la fecha no está determinada.
+
 La vista principal ofrece **Activos**, **Favoritos**, **Descartados** y **Todos**. Combina los filtros de nombre, palabras o frases dentro de los mensajes guardados de la búsqueda seleccionada, última actividad, niños, mascotas, personas, ingresos, respuesta y seguimiento. La búsqueda de conversaciones localiza la frase tal como aparece dentro de un mensaje y no busca en otros periodos.
 
 El rango doble de ingresos permite fijar un mínimo y un máximo; los datos **No indicado** se pueden filtrar por separado y quedan fuera de un rango de ingresos. También puedes distinguir si el ingreso es del grupo o individual. Oculta el panel de filtros cuando necesites más espacio: los filtros aplicados se conservan.

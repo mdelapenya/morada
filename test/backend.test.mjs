@@ -329,6 +329,27 @@ async function request(server, pathname, options = {}) {
   return fetch(`http://127.0.0.1:${address.port}${pathname}`, options);
 }
 
+test('message detail exposes the original snapshot dates without rewriting messages',async t=>{
+  const {db}=temporaryDb(t);
+  const data=fixture(699,{referenceDay:'2026-09-24',referenceAt:'2026-09-24T08:00:00.000Z',
+    exportedAt:'2026-09-29T12:00:00.000Z',messages:[{sequence:1,author:'Persona',
+      direction:'received',dateLabel:'Hoy',time:'10:00',rawText:'Mensaje de prueba'}]});
+  importConversation(db,data,'synthetic.json','2026-09-29');
+  const before=db.prepare('SELECT raw_json FROM conversations WHERE id=?').get('699').raw_json;
+  const server=createServer(db);
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const detail=await (await request(server,'/api/applicants/699')).json();
+  assert.equal(detail.referenceDay,data.referenceDay);
+  assert.equal(detail.referenceAt,data.referenceAt);
+  assert.equal(detail.exportedAt,data.exportedAt);
+  assert.deepEqual(detail.messages,data.messages);
+  assert.equal(db.prepare('SELECT raw_json FROM conversations WHERE id=?').get('699').raw_json,before);
+  const module=await request(server,'/message-date.mjs');
+  assert.equal(module.status,200);
+  assert.match(module.headers.get('content-type'),/^text\/javascript/);
+});
+
 test('HTTP sirve la marca Morada como SVG con un tipo seguro', async t => {
   const { db } = temporaryDb(t);
   const server = createServer(db);

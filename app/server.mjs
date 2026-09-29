@@ -395,6 +395,7 @@ export function createServer(db, options = {}) {
         } catch { return send(400,{error:'Cambios no válidos'}); }
       }
       const assets = {'/':['index.html','text/html; charset=utf-8'],'/app.js':['app.js','text/javascript; charset=utf-8'],
+        '/message-date.mjs':['message-date.mjs','text/javascript; charset=utf-8'],
         '/visit-time.mjs':['visit-time.mjs','text/javascript; charset=utf-8'],'/style.css':['style.css','text/css; charset=utf-8'],
         '/morada-mark.svg':['morada-mark.svg','image/svg+xml; charset=utf-8'],'/morada-logo.svg':['morada-logo.svg','image/svg+xml; charset=utf-8']};
       if (req.method === 'GET' && assets[url.pathname]) {

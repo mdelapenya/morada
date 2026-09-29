@@ -22,6 +22,7 @@ const files = [
   'app/visit-calendar.mjs',
   'app/visits.mjs',
   'app/public/app.js',
+  'app/public/message-date.mjs',
   'app/public/index.html',
   'app/public/morada-logo.svg',
   'app/public/morada-mark.svg',

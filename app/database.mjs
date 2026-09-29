@@ -833,6 +833,7 @@ export function applicantDetail(db, id, propertyId = DEFAULT_PROPERTY_ID, period
   const messageCount=db.prepare('SELECT count(*) AS n FROM messages WHERE conversation_id=?').get(item.conversation_id).n;
   return { ...item,...attention,messageCount,
     ...importedMessageMetadata(data.messages,period,periodActivityStartsAt(db,period),item.history_status),
+    referenceDay:data.referenceDay??null,referenceAt:data.referenceAt??null,exportedAt:data.exportedAt??null,
     profile: data.profile, messages: data.messages, integrity: data.integrity, properties: data.properties };
 }
 
