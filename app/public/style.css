@@ -46,7 +46,7 @@ tr.attention-row{background:#f7f9ed}tr.attention-row:hover{background:#eef4dc}.a
   --danger-soft:#fff0f3;
 }
 body{background:var(--canvas);color:var(--ink)}
-button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:3px solid var(--focus);outline-offset:3px}
+button:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:3px solid var(--focus);outline-offset:3px}
 button:disabled{opacity:.5;cursor:not-allowed}
 .topbar{background:rgba(255,255,255,.94);border-color:var(--line);box-shadow:0 1px 0 rgba(42,24,63,.03)}
 .brand{color:var(--ink);font-weight:760}.brand-mark{display:block;width:34px;height:34px;flex:none}
