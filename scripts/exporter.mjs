@@ -334,7 +334,7 @@ async function verifiedSnapshot(ev,wait,entry){
   throw new Error(`La conversación cambió durante la lectura del chat ${entry.id} (selección visible: ${current?.activeId??'ninguna'}). Reintenta la sincronización.`);
 }
 
-async function extract(ev,wait,entry,maxSteps,propertyId){
+async function extract(ev,wait,entry,maxSteps,propertyId,knownInPeriod=false){
   ev(expressions.closeProfile);await seekAndOpen(ev,wait,entry.id,maxSteps);
   let snapshot=null,observed=null;
   for(let attempt=0;attempt<20;attempt++){
@@ -356,8 +356,9 @@ async function extract(ev,wait,entry,maxSteps,propertyId){
   for(const property of snapshot.properties)observedProperties.set(property.url,property);
   virtualized ||= snapshot.historyText!==oldest;
   if(propertyId){
-    if(!observedProperties.size)throw new Error(`No se pudo comprobar el anuncio del chat ${entry.id}. Revisa la conversación en Chrome y reintenta.`);
-    if(![...observedProperties.values()].some(p=>matchesProperty(p.url,propertyId)))return null;
+    if(!observedProperties.size){
+      if(!knownInPeriod)throw new Error(`No se pudo comprobar el anuncio del chat ${entry.id}. No está vinculado a este anuncio y periodo en Morada y no muestra el enlace del anuncio en Chrome.`);
+    }else if(![...observedProperties.values()].some(p=>matchesProperty(p.url,propertyId)))return null;
   }
   let profile=null;
   if(snapshot.profileAvailable){
@@ -371,6 +372,7 @@ async function extract(ev,wait,entry,maxSteps,propertyId){
   const integrity={history:unchanged>=2&&!virtualized&&!unexploredControls.length&&!hasAttachments?'completo':'parcial',profile:profile&&profile.controls.length===1?'completo':snapshot.profileAvailable?'parcial':'no disponible',notes:[
     'Fechas y horas conservadas como las muestra Idealista; no se infieren fechas absolutas para mensajes.',
     'Historial desplazado al inicio hasta permanecer estable y verificado de nuevo al final.',
+    ...(propertyId&&!observedProperties.size&&knownInPeriod?['El enlace del anuncio no está visible; se conserva la vinculación previamente guardada para este chat, anuncio y periodo.']:[]),
     ...(unchanged<2?['El historial no se estabilizó durante la carga; requiere revisión.']:[]),
     ...(virtualized?['El contenido cambió al recorrer el historial; requiere revisión.']:[]),
     ...(unexploredControls.length?['Hay controles en el historial; revisar si falta contenido.']:[]),
@@ -494,7 +496,7 @@ export async function exportToday({knownIds=[],sinceDate,untilDate,propertyId,pe
           }catch{ /* pending */ }
         }
         examined++;
-        const result=await extract(ev,wait,entry,maxListSteps,refreshExisting?propertyId:null);
+        const result=await extract(ev,wait,entry,maxListSteps,refreshExisting?propertyId:null,Boolean(periodId)&&known.has(card.id));
         onProgress({phase:'exporting',discovered:scan.discovered,candidates:candidates.length,exported,examined});
         if(!result){skippedProperty++;continue;}
         if(periodId){

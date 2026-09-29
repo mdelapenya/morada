@@ -292,6 +292,37 @@ const periodId='5e7e9db2-610d-4955-9969-8d8bd53b23dd';
 const periodOptions={periodId,propertyId:'13579135',sinceDate:'2026-09-23',untilDate:'2026-09-23',activityStartsAt:'2026-09-22T22:00:00.000Z',includeLegacyHistory:false,refreshExisting:true,sync:true};
 const message=(dateLabel,time,rawText)=>({sequence:1,dateLabel,time,author:'Persona',direction:'received',text:rawText,embeddedProfile:null,rawText,attachments:[],media:[],domClass:''});
 
+test('hidden listing refresh uses only known IDs in a period and keeps the observed properties empty',async t=>inTemp(t,async root=>{
+  for(const scanMode of ['full','incremental']){
+    const browser=fake({pages:[[card('1')]],propertyById:{'1':[]},messageById:{'1':'Mensaje nuevo'}});
+    const result=await exportToday({root:path.join(root,scanMode),connectBrowser:()=>browser.ev,wait:instant,
+      ...periodOptions,knownIds:['1'],scanMode,canEarlyStop:scanMode==='incremental'});
+    assert.equal(result.exported,1);
+    assert.equal(result.fullCoverage,true);
+    const data=JSON.parse(await readFile(result.files[0],'utf8'));
+    assert.deepEqual(data.properties,[]);
+    assert.equal(data.periodMessages[0].text,'Mensaje nuevo');
+    assert.ok(data.integrity.notes.some(note=>note.includes('vinculación previamente guardada')));
+  }
+}));
+
+test('missing listing cannot use an unknown ID or unscoped known ID',async t=>inTemp(t,async root=>{
+  for(const options of [periodOptions,{sync:true,refreshExisting:true,propertyId:'13579135',knownIds:['1']}]){
+    const browser=fake({pages:[[card('1')]],propertyById:{'1':[]}});
+    await assert.rejects(exportToday({root,connectBrowser:()=>browser.ev,wait:instant,...options}),/No se pudo comprobar el anuncio/);
+  }
+}));
+
+test('known hidden chats still require the selected chat and never override a conflicting link',async t=>inTemp(t,async root=>{
+  const switched=fake({pages:[[card('1')]],propertyById:{'1':[]},switchedHistoryId:'999'});
+  await assert.rejects(exportToday({root,connectBrowser:()=>switched.ev,wait:instant,
+    ...periodOptions,knownIds:['1']}),/La conversación cambió/);
+  const other=fake({pages:[[card('1')]],propertyById:{'1':[{url:'https://www.idealista.com/inmueble/12345678/'}]}});
+  const result=await exportToday({root,connectBrowser:()=>other.ev,wait:instant,...periodOptions,knownIds:['1']});
+  assert.equal(result.skippedProperty,1);
+  assert.deepEqual(result.files,[]);
+}));
+
 test('first period sync finishes a multi-page list with no older chat and excludes another listing',async t=>inTemp(t,async root=>{
   const other={url:'https://www.idealista.com/inmueble/12345678/',text:'Otro anuncio'};
   const browser=fake({pages:[[card('1')],[card('2')],[card('3')]],propertyById:{'2':[other]}});

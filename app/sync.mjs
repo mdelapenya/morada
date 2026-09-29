@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { importConversation, validIsoDate, getProperty, getOpenPeriod,
-  assertOpenPeriod, periodActivityStartsAt, hasProperty, recordSyncAttention,
+  assertOpenPeriod, periodActivityStartsAt, matchesConversationProperty, recordSyncAttention,
   recordSuccessfulSync, hasSourceBaseline, recordSourceBaseline } from './database.mjs';
 import { countNewIncomingMessages } from './sync-attention.mjs';
 import { fingerprintMessageHistory } from '../scripts/message-history.mjs';
@@ -66,7 +66,7 @@ function verifyRefresh(db, file, periodId, sourceIdealistaId) {
   return true;
 }
 
-async function loadResult(result, exportsRoot, sinceDate, untilDate, idealistaPropertyId, periodId,
+async function loadResult(db, result, exportsRoot, sinceDate, untilDate, idealistaPropertyId, periodId,
   activityStartsAt,requestedMode,effectiveMode,canEarlyStop,baselineById) {
   if (!result || result.type !== 'result' || !validIsoDate(result.date) || result.date < untilDate ||
     (result.sinceDate !== undefined && result.sinceDate !== sinceDate) ||
@@ -147,7 +147,7 @@ async function loadResult(result, exportsRoot, sinceDate, untilDate, idealistaPr
     const activityDate = data.activityDate === undefined ? result.date : data.activityDate;
     if (!validIsoDate(activityDate) || activityDate < sinceDate || activityDate > untilDate)
       throw failure('INVALID_EXPORT', `La fecha de actividad del chat ${match[1]} no es válida. Vuelve a sincronizar.`);
-    if (!hasProperty(data, idealistaPropertyId))
+    if (!matchesConversationProperty(db, data, idealistaPropertyId, periodId))
       throw failure('INVALID_EXPORT', `El chat ${match[1]} no corresponde al anuncio configurado. Vuelve a sincronizar.`);
     files.push({ source: resolved, id: match[1], data });
   }
@@ -297,7 +297,7 @@ export function createSyncController(db, options = {}) {
       if (exitCode !== 0 || exitSignal) throw failure('WORKER_FAILED', 'No se pudo completar la lectura de Chrome. Vuelve a intentarlo.');
       if (!result) throw failure('INVALID_RESULT', 'La extracción terminó sin resultados. Vuelve a sincronizar.');
       job.phase = 'importing';
-      const { date, files,scan } = await loadResult(result, exportsRoot, sinceDate, untilDate,
+      const { date, files,scan } = await loadResult(db, result, exportsRoot, sinceDate, untilDate,
         idealistaPropertyId,periodId,activityStartsAt,requestedMode,effectiveMode,
         canEarlyStop,baselineById);
       if (!active()) return;

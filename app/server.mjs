@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { openDatabase, listApplicants, applicantDetail, updateApplicant, createManualApplicant,
   getProperty, listProperties, createProperty, updateProperty, DEFAULT_PROPERTY_ID } from './database.mjs';
-import { getPeriod, getOpenPeriod, listPeriods, createPeriod, updatePeriod, closePeriod } from './database.mjs';
+import { getPeriod, getOpenPeriod, listPeriods, createPeriod, updatePeriod, closePeriod, reopenPeriod } from './database.mjs';
 import { deleteProperty, restoreProperty, purgeProperty } from './database.mjs';
 import { getLastSuccessfulSync, markSyncAttentionRead } from './database.mjs';
 import { createSyncController, madridToday } from './sync.mjs';
@@ -188,6 +188,19 @@ export function createServer(db, options = {}) {
           return send(200,{syncAttention:result.syncAttention,
             newIncomingCount:result.newIncomingCount,attentionRevision:result.attentionRevision});
         } catch(error) { return send(error.status||400,{error:error.message}); }
+      }
+      const reopenPath=url.pathname.match(/^\/api\/properties\/([^/]+)\/periods\/([^/]+)\/reopen$/);
+      if (reopenPath && req.method==='POST') {
+        const propertyId=decodeURIComponent(reopenPath[1]),periodId=decodeURIComponent(reopenPath[2]);
+        if (!getProperty(db,propertyId)) return send(404,{error:'Vivienda no encontrada'});
+        if (!getPeriod(db,propertyId,periodId)) return send(404,{error:'Periodo no encontrado'});
+        if (sync.snapshot().state==='running' && sync.snapshot().propertyId===propertyId)
+          return send(409,{error:'Espera a que termine la sincronización'});
+        try {
+          const payload=await readJsonBody(req,allowedHosts,1024);
+          if (Object.keys(payload).length) return send(400,{error:'Petición no válida'});
+          return send(200,{period:reopenPeriod(db,propertyId,periodId)});
+        } catch(error) { return send(error.status||409,{error:error.message,...(error.code?{code:error.code}:{})}); }
       }
       const closePath=url.pathname.match(/^\/api\/properties\/([^/]+)\/periods\/([^/]+)\/close$/);
       if (closePath && req.method==='POST') {

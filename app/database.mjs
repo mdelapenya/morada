@@ -358,6 +358,16 @@ export function hasProperty(data, propertyId) {
   return Array.isArray(data.properties) && data.properties.some(item => extractIdealistaId(item?.url) === propertyId);
 }
 
+export function matchesConversationProperty(db, data, propertyId, periodId) {
+  if (hasProperty(data,propertyId)) return true;
+  // Hidden listings can lose their DOM link. Only an existing, scoped identity
+  // can replace that evidence; a conflicting or malformed link never can.
+  return data.periodId===periodId && data.propertyId===propertyId &&
+    Array.isArray(data.properties) && data.properties.length===0 &&
+    Boolean(db.prepare(`SELECT 1 FROM conversations WHERE period_id=?
+      AND source_idealista_id=? AND external_chat_id=?`).get(periodId,propertyId,String(data.id)));
+}
+
 export function importConversation(db, data, source, day, propertyId, periodId, untilDate = day,
   archivedSourceIdealistaId = null) {
   const activityDate = data.activityDate === undefined ? day : data.activityDate;
@@ -390,7 +400,7 @@ export function importConversation(db, data, source, day, propertyId, periodId, 
   const period = assertOpenPeriod(db,propertyId,periodId ?? property.activePeriodId);
   const archived=archivedSourceIdealistaId!==null;
   const importListing=archived ? archivedSourceIdealistaId : period.idealistaId;
-  if (importListing && !hasProperty(data,importListing))
+  if (importListing && !matchesConversationProperty(db,data,importListing,period.id))
     throw new Error('El chat no corresponde al anuncio seleccionado');
   if (archived && importListing!==period.idealistaId && importListing!==period.originalIdealistaId &&
     !db.prepare(`SELECT 1 FROM conversations WHERE period_id=? AND source_idealista_id=?
@@ -524,7 +534,6 @@ export function importExports(db, directory, options = {}) {
           const namespace = path.basename(location).match(/^property-(\d+)$/)?.[1] ??
             path.basename(path.dirname(location)).match(/^property-(\d+)$/)?.[1];
           const data = JSON.parse(readFileSync(source, 'utf8'));
-          if (namespace && !hasProperty(data,namespace)) throw new Error('El archivo no corresponde al anuncio de su carpeta');
           const observedIds=[...new Set(data.properties?.map(item=>extractIdealistaId(item?.url)).filter(Boolean)??[])];
           const observed = namespace ?? (observedIds.length===1?observedIds[0]:null);
           const directoryPeriod = path.basename(location).startsWith('period-') ?
@@ -558,6 +567,8 @@ export function importExports(db, directory, options = {}) {
           }
           if (!period)
             throw new Error('Indica explícitamente el periodo de destino; no se puede asignar este archivo');
+          if (namespace && !matchesConversationProperty(db,data,namespace,period.id))
+            throw new Error('El archivo no corresponde al anuncio de su carpeta');
           const targetProperty=period.propertyId,targetPeriod=period.id;
           if (!getProperty(db,targetProperty)) throw new Error('La vivienda de destino está eliminada');
           if (period.status==='closed') {
@@ -909,15 +920,25 @@ function propertyResult(row) {
     defaultIdealistaUrl:row.default_url ?? null, canEditIdealistaUrl:true,
     canDeleteProperty:true, deletedAt:row.deleted_at ?? null,
     syncEnabled: Boolean(row.idealista_id), dateConfirmed: Boolean(row.date_confirmed),
+    lastClosedPeriod:row.closed_period_id ? {id:row.closed_period_id,
+      chosenApplicantId:row.chosen_applicant_id,chosenApplicantName:row.chosen_applicant_name} : null,
     activePeriodId:row.active_period_id ?? null, periodStatus:row.active_period_id ? 'open' : null };
 }
+
+const lastClosedPeriodJoin = `LEFT JOIN search_periods closed ON closed.id=(
+  SELECT id FROM search_periods WHERE property_id=p.id AND status='closed'
+  ORDER BY closed_at DESC,created_at DESC,rowid DESC LIMIT 1)
+  LEFT JOIN applicants chosen ON chosen.id=closed.chosen_applicant_id
+    AND chosen.period_id=closed.id AND chosen.property_id=p.id`;
 
 export function getProperty(db, id = DEFAULT_PROPERTY_ID, includeDeleted = false) {
   return propertyResult(db.prepare(`SELECT p.id,p.title,p.address,p.deleted_at,
     coalesce(p.deleted_default_idealista_id,p.idealista_id) AS default_idealista_id,
     coalesce(p.deleted_default_url,p.url) AS default_url,s.id AS active_period_id,
-    s.monthly_rent_cents,s.rental_since,s.idealista_id,s.url,s.date_confirmed
+    s.monthly_rent_cents,s.rental_since,s.idealista_id,s.url,s.date_confirmed,
+    closed.id AS closed_period_id,closed.chosen_applicant_id,chosen.display_name AS chosen_applicant_name
     FROM properties p LEFT JOIN search_periods s ON s.property_id=p.id AND s.status='open'
+    ${lastClosedPeriodJoin}
     WHERE p.id=? AND (? OR p.deleted_at IS NULL)`).get(id,Number(includeDeleted)));
 }
 
@@ -926,8 +947,10 @@ export function listProperties(db, status = 'active') {
   return db.prepare(`SELECT p.id,p.title,p.address,p.created_at,p.deleted_at,
     coalesce(p.deleted_default_idealista_id,p.idealista_id) AS default_idealista_id,
     coalesce(p.deleted_default_url,p.url) AS default_url,s.id AS active_period_id,
-    s.monthly_rent_cents,s.rental_since,s.idealista_id,s.url,s.date_confirmed
+    s.monthly_rent_cents,s.rental_since,s.idealista_id,s.url,s.date_confirmed,
+    closed.id AS closed_period_id,closed.chosen_applicant_id,chosen.display_name AS chosen_applicant_name
     FROM properties p LEFT JOIN search_periods s ON s.property_id=p.id AND s.status='open'
+    ${lastClosedPeriodJoin}
     WHERE (?='all' OR (?='deleted' AND p.deleted_at IS NOT NULL) OR (?='active' AND p.deleted_at IS NULL))
     ORDER BY p.id=? DESC,p.created_at,p.id`).all(status,status,status,DEFAULT_PROPERTY_ID)
     .map(propertyResult);
@@ -1159,6 +1182,34 @@ export function purgeProperty(db,id) {
     db.exec('COMMIT');
   } catch(error) { db.exec('ROLLBACK'); throw error; }
   return {purged:true,id};
+}
+
+export function reopenPeriod(db, propertyId, periodId) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (!getProperty(db,propertyId))
+      throw Object.assign(new Error('Vivienda no encontrada'),{code:'PROPERTY_NOT_FOUND'});
+    const period=getPeriod(db,propertyId,periodId);
+    if (!period) throw Object.assign(new Error('Periodo no encontrado'),{code:'PERIOD_NOT_FOUND'});
+    if (period.status!=='closed')
+      throw Object.assign(new Error('La búsqueda ya está abierta'),{code:'PERIOD_NOT_CLOSED'});
+    if (getOpenPeriod(db,propertyId))
+      throw Object.assign(new Error('Ya hay otra búsqueda abierta en esta vivienda'),{code:'PERIOD_OPEN'});
+    const latest=db.prepare(`SELECT id FROM search_periods WHERE property_id=?
+      ORDER BY created_at DESC,rowid DESC LIMIT 1`).get(propertyId);
+    if (latest.id!==periodId)
+      throw Object.assign(new Error('No se puede reabrir una búsqueda con búsquedas posteriores'),{code:'PERIOD_NOT_LATEST'});
+    if (duplicateActiveListing(db,period.idealistaId,propertyId))
+      throw Object.assign(new Error('El anuncio de esta búsqueda ya está vinculado a otra vivienda activa'),{code:'DUPLICATE_PROPERTY'});
+    db.prepare(`UPDATE search_periods SET status='open',chosen_applicant_id=NULL,closed_at=NULL,
+      housing_title=NULL,housing_address=NULL WHERE id=? AND property_id=? AND status='closed'`)
+      .run(periodId,propertyId);
+    db.prepare(`UPDATE properties SET monthly_rent_cents=?,rental_since=?,idealista_id=?,url=?,date_confirmed=?
+      WHERE id=?`).run(period.monthlyRentCents,period.rentalSince,period.idealistaId,period.url,
+        Number(period.dateConfirmed),propertyId);
+    db.exec('COMMIT');
+  } catch(error) { db.exec('ROLLBACK'); throw error; }
+  return getPeriod(db,propertyId,periodId);
 }
 
 export function closePeriod(db, propertyId, periodId, chosenApplicantId) {

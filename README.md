@@ -14,7 +14,11 @@ Alterna entre **Cuadrícula** y **Lista** en Mis viviendas. Abre una vivienda pa
 
 Cada vivienda tiene una búsqueda activa, con fecha de inicio, alquiler y URL del anuncio. Desde **Editar búsqueda** puedes corregir esos datos. Cuando hayas decidido, abre la ficha de la persona elegida y pulsa **Elegir inquilino y cerrar búsqueda**. La búsqueda queda en el histórico, con sus interesados, conversaciones, favoritos, descartes y notas, para consultarla sin mezclarla con la siguiente.
 
-Para volver a anunciar la misma vivienda, pulsa **Nueva búsqueda**. Indica una nueva fecha, alquiler y, si corresponde, URL: empieza con una lista distinta y conserva el histórico anterior separado.
+Mientras no abras una nueva búsqueda, **Mis viviendas** muestra el inquilino elegido en la última búsqueda cerrada, tanto en cuadrícula como en lista. Dentro de cada búsqueda cerrada puedes abrir su ficha con **Ver ficha del inquilino elegido**, aunque los filtros del listado no lo muestren.
+
+Si la elección no sale adelante, usa **Gestionar → Reabrir búsqueda** y confirma la reapertura. Se retira el inquilino elegido y recuperas la misma búsqueda, con todos sus interesados, chats, notas, favoritos y visitas. Puedes seguir sincronizando y elegir a otra persona; la ficha anterior se conserva sin descartarla automáticamente. Solo se puede reabrir la última búsqueda si no has creado otra después y su anuncio no está vinculado a otra vivienda activa.
+
+Para iniciar otro proceso de alquiler independiente, pulsa **Nueva búsqueda**. Indica una nueva fecha, alquiler y, si corresponde, URL: empieza con una lista distinta y conserva el histórico anterior separado. Los chats anteriores siguen disponibles al seleccionar su búsqueda cerrada.
 
 Desde **Gestionar → Editar vivienda** puedes eliminar una vivienda. Aparecerá en **Eliminadas** y podrás restaurarla. **Eliminar definitivamente** pide confirmación y la borra de la aplicación junto con sus búsquedas, interesados, conversaciones y notas; las copias y exportaciones que ya existieran no se alteran.
 
@@ -41,6 +45,8 @@ Puedes descargar una visita individual o el rango visible, con los filtros aplic
 Para incorporar conversaciones, pulsa **Sincronizar** en la búsqueda abierta. La primera sincronización hace una revisión completa. Las siguientes suelen ser rápidas: al encontrar cinco chats conocidos seguidos sin cambios, deja de revisar los anteriores. Esa regla tiene en cuenta la conversación, incluidos mensajes enviados y recibidos, pero es una optimización: no garantiza que se hayan leído siempre todos los chats disponibles. Para volver a revisar todos los chats, abre la flecha junto a **Sincronizar** (**Opciones de sincronización**) y elige **Sincronización completa**.
 
 Cada conversación se conserva una sola vez dentro de su búsqueda. Si varios chats parecen pertenecer a la misma persona, siguen siendo conversaciones distintas y no se unen automáticamente.
+
+Si ocultas el anuncio en Idealista después de alquilar la vivienda, puedes seguir actualizando los chats ya guardados para ese anuncio en la misma búsqueda abierta, aunque dejen de mostrar el enlace del anuncio. Un chat desconocido necesita ese enlace para comprobar a qué anuncio pertenece. Cerrar la búsqueda en Morada conserva su historial e impide nuevas sincronizaciones.
 
 **Recargar listado**, junto a los resultados, solo vuelve a mostrar los datos ya guardados. No abre Chrome ni añade conversaciones nuevas.
 

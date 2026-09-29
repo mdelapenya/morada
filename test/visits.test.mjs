@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { openDatabase, createProperty, createManualApplicant, deleteProperty,
-  restoreProperty, purgeProperty, closePeriod } from '../app/database.mjs';
+  restoreProperty, purgeProperty, closePeriod, reopenPeriod } from '../app/database.mjs';
 import { createVisit, updateVisit, getVisit, listVisits, listApplicantVisits,
   updateCalendarSettings } from '../app/visits.mjs';
 import { normalizeTimeZone } from '../app/public/visit-time.mjs';
@@ -44,6 +44,10 @@ test('visits preserve identity, ownership and closed period protection',t=>{
   closePeriod(db,a.propertyId,a.periodId,a.applicantId);
   assert.throws(()=>updateVisit(db,one.id,{status:'confirmed'}),{code:'PERIOD_CLOSED'});
   assert.equal(listApplicantVisits(db,a.propertyId,a.periodId,a.applicantId).length,2);
+  const saved=listApplicantVisits(db,a.propertyId,a.periodId,a.applicantId);
+  reopenPeriod(db,a.propertyId,a.periodId);
+  assert.deepEqual(listApplicantVisits(db,a.propertyId,a.periodId,a.applicantId),saved);
+  assert.equal(updateVisit(db,one.id,{status:'confirmed'}).status,'confirmed');
 });
 
 test('local times validate spring gap, repeated hour and offset',t=>{

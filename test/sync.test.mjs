@@ -6,8 +6,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { openDatabase, importConversation, updateApplicant, createProperty, createManualApplicant,
-  closePeriod, deleteProperty, purgeProperty, updateProperty } from '../app/database.mjs';
+import { openDatabase, importConversation, importExports, updateApplicant, createProperty, createManualApplicant,
+  closePeriod, createPeriod, deleteProperty, purgeProperty, updateProperty } from '../app/database.mjs';
 import { createServer } from '../app/server.mjs';
 import { countNewIncomingMessages } from '../app/sync-attention.mjs';
 
@@ -142,6 +142,68 @@ async function setup(t) {
   return { db, dbPath:path.join(root,'app.sqlite'), children, known, contexts,
     server, api, write, result, settled, exportsRoot };
 }
+
+test('sync refreshes a hidden listing from its saved identity and preserves notes and attention', async t => {
+  const x=await setup(t),periodId='initial:13579135';
+  const original=fixture('901',{messages:[{sequence:1,direction:'received',text:'Original',rawText:'Original'}]});
+  importConversation(x.db,original,'prior/901.json',initialDate);
+  updateApplicant(x.db,'chat:901',{notes:'Nota sintética',favorite:true});
+  await x.api('POST');
+  const fresh=fixture('901',{periodId,propertyId:'13579135',properties:[],
+    sinceDate:initialDate,untilDate:date,activityStartsAt:x.contexts[0].activityStartsAt,includeLegacyHistory:true,
+    exportedAt:'2026-09-24T12:00:00.000Z',messages:[...original.messages,
+      {sequence:2,direction:'received',text:'Nuevo',rawText:'Nuevo',messageDate:date,occurredAt:'2026-09-24T08:00:00.000Z'}]});
+  const file=x.write(fresh,date,'13579135',periodId);
+  x.children[0].send(x.result([file],{periodId,activityStartsAt:fresh.activityStartsAt}));x.children[0].finish();
+  const job=await x.settled();
+  assert.equal(job.state,'succeeded');
+  assert.equal(job.updated,1);
+  assert.equal(job.newIncomingMessages,1);
+  assert.deepEqual({...x.db.prepare('SELECT notes,favorite FROM applicants WHERE id=?').get('chat:901')},
+    {notes:'Nota sintética',favorite:1});
+  const stored=x.db.prepare('SELECT source_idealista_id,raw_json FROM conversations WHERE external_chat_id=?').get('901');
+  assert.equal(stored.source_idealista_id,'13579135');
+  assert.deepEqual(JSON.parse(stored.raw_json).properties,[]);
+  const next={...fresh,exportedAt:'2026-09-24T13:00:00.000Z'};
+  x.write(next,date,'13579135',periodId);
+  assert.equal(importExports(x.db,x.exportsRoot).imported,1);
+});
+
+test('missing or conflicting listing evidence cannot create or reassign chats and rolls back the batch', async t => {
+  const x=await setup(t),periodId='initial:13579135';
+  const original=fixture('902');
+  importConversation(x.db,original,'prior/902.json',initialDate);
+  for(const overrides of [{id:'903',properties:[]},
+    {properties:[{url:'https://www.idealista.com/inmueble/12345678/'}]},
+    {properties:[{url:'invalid'}]}]){
+    await x.api('POST');
+    const context=x.contexts.at(-1);
+    const valid=fixture('902',{exportedAt:'2026-09-24T12:00:00.000Z'});
+    const invalid=fixture('902',{periodId,propertyId:'13579135',sinceDate:initialDate,untilDate:date,
+      activityStartsAt:context.activityStartsAt,includeLegacyHistory:true,
+      exportedAt:'2026-09-24T13:00:00.000Z',...overrides});
+    // Distinct files allow an otherwise valid update to precede the unknown chat.
+    const files=invalid.id==='903'?[x.write(valid),x.write(invalid)]:[x.write(invalid)];
+    x.children.at(-1).send(x.result(files));x.children.at(-1).finish();
+    assert.equal((await x.settled()).state,'failed');
+    assert.equal(x.db.prepare('SELECT count(*) AS n FROM conversations').get().n,1);
+    assert.equal(x.db.prepare('SELECT exported_at FROM conversations').get().exported_at,original.exportedAt);
+  }
+  const missing=fixture('902',{periodId,propertyId:'13579135',properties:[],exportedAt:'2026-09-24T13:00:00.000Z'});
+  updateProperty(x.db,'13579135',{idealistaUrl:'https://www.idealista.com/inmueble/24682468/'});
+  assert.throws(()=>importConversation(x.db,{...missing,propertyId:'24682468'},
+    'synthetic.json',date,'13579135',periodId),/no corresponde al anuncio/);
+  updateProperty(x.db,'13579135',{idealistaUrl:'https://www.idealista.com/inmueble/13579135/'});
+  const other=createProperty(x.db,{title:'Otra vivienda',rentalSince:initialDate,idealistaUrl:'https://www.idealista.com/inmueble/12345678/'});
+  assert.throws(()=>importConversation(x.db,{...missing,periodId:other.activePeriodId,propertyId:'12345678'},
+    'synthetic.json',date,other.id,other.activePeriodId),/no corresponde al anuncio/);
+  const closed=closePeriod(x.db,'13579135',periodId,'chat:902');
+  assert.throws(()=>importConversation(x.db,missing,'synthetic.json',date,'13579135',periodId),/cerrado/);
+  const nextDay=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(closed.closedAt));
+  const next=createPeriod(x.db,'13579135',{rentalSince:nextDay},nextDay);
+  assert.throws(()=>importConversation(x.db,{...missing,periodId:next.id},
+    'synthetic.json',nextDay,'13579135',next.id),/no corresponde al anuncio/);
+});
 
 test('first incremental completes a full baseline, then five unchanged chats stop safely', async t => {
   const x=await setup(t),periodId='initial:13579135';
@@ -657,6 +719,19 @@ test('running sync blocks closing and period metadata edits until import finishe
   assert.equal(closed.status,200);
   assert.equal(closed.body.period.status,'closed');
   assert.equal((await x.api('POST',`${base}/sync`)).status,409);
+  const reopened=await x.api('POST',`${base}/reopen`);
+  assert.equal(reopened.status,200);
+  assert.equal(reopened.body.period.id,periodId);
+  assert.equal((await x.api('POST',`${base}/sync`)).status,202);
+  assert.equal((await x.api('POST',`${base}/reopen`)).status,409);
+  assert.deepEqual(x.known[1].ids,['801']);
+  const fresh=fixture('801',{exportedAt:'2026-09-24T12:00:00.000Z',messages:[
+    ...fixture('801').messages,{sequence:2,direction:'received',rawText:'Después de reabrir',text:'Después de reabrir',
+      messageDate:date,occurredAt:'2026-09-24T08:00:00.000Z'}]});
+  x.children[1].send(x.result([x.write(fresh)]));x.children[1].finish();
+  assert.equal((await x.settled()).state,'succeeded');
+  assert.equal(x.db.prepare('SELECT count(*) AS n FROM conversations').get().n,1);
+  assert.equal(x.db.prepare('SELECT count(*) AS n FROM messages').get().n,2);
 });
 
 test('sync known IDs follow the edited listing and deletion waits for the job', async t => {

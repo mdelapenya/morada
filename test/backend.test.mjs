@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { openDatabase, normalize, importConversation, importExports, listApplicants, applicantDetail,
   updateApplicant, getProperty, createProperty, updateProperty, createManualApplicant, getPeriod, getOpenPeriod,
-  listPeriods, periodActivityStartsAt } from '../app/database.mjs';
+  listPeriods, listProperties, createPeriod, closePeriod, reopenPeriod, deleteProperty, periodActivityStartsAt } from '../app/database.mjs';
 import { createServer } from '../app/server.mjs';
 import { importedArrival, manualArrival } from '../app/arrival.mjs';
 import { importedHasReplied, importedAwaitingReply } from '../app/reply.mjs';
@@ -374,7 +374,7 @@ test('property date and private notes persist, validate input, and appear in det
   assert.deepEqual((await response.json()).property, { id: '13579135', title: 'Piso de prueba',
     address: null, monthlyRentCents: 82500, idealistaId: '13579135', syncEnabled: true,
     url: 'https://www.idealista.com/inmueble/13579135/', rentalSince: '2026-09-23', dateConfirmed: true,
-    activePeriodId:'initial:13579135',periodStatus:'open',
+    activePeriodId:'initial:13579135',periodStatus:'open',lastClosedPeriod:null,
     defaultIdealistaId:'13579135',defaultIdealistaUrl:'https://www.idealista.com/inmueble/13579135/',
     canEditIdealistaUrl:true,canDeleteProperty:true,deletedAt:null });
   const json = { 'Content-Type': 'application/json' };
@@ -607,6 +607,99 @@ test('CLI import reads legacy and property namespaces without duplicating or cle
     {favorite:1,notes:'Privado',property_id:second.id});
 });
 
+test('housing returns the latest chosen tenant scoped to its own closed search', t => {
+  const {db}=temporaryDb(t);
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  assert.equal(getProperty(db).lastClosedPeriod,null);
+  add(db,591,[]);
+  const original=getOpenPeriod(db,'13579135');
+  closePeriod(db,'13579135',original.id,'chat:591');
+  const expected={id:original.id,chosenApplicantId:'chat:591',chosenApplicantName:'Solicitante 591'};
+  assert.deepEqual(getProperty(db).lastClosedPeriod,expected);
+  assert.deepEqual(listProperties(db).find(p=>p.id==='13579135').lastClosedPeriod,expected);
+  const other=createProperty(db,{title:'Otra vivienda',rentalSince:today});
+  const otherTenant=createManualApplicant(db,other.id,{name:'Otra persona'},other.activePeriodId);
+  closePeriod(db,other.id,other.activePeriodId,otherTenant.applicant_id);
+  const next=createPeriod(db,'13579135',{rentalSince:today},today);
+  assert.equal(getProperty(db).activePeriodId,next.id);
+  assert.deepEqual(getProperty(db).lastClosedPeriod,expected);
+  const tenant=createManualApplicant(db,'13579135',{name:'Inquilino más reciente'},next.id);
+  closePeriod(db,'13579135',next.id,tenant.applicant_id);
+  assert.deepEqual(getProperty(db).lastClosedPeriod,{id:next.id,
+    chosenApplicantId:tenant.applicant_id,chosenApplicantName:'Inquilino más reciente'});
+  assert.equal(listProperties(db).find(p=>p.id===other.id).lastClosedPeriod.chosenApplicantName,'Otra persona');
+  assert.equal(getPeriod(db,'13579135',original.id).chosenApplicantName,'Solicitante 591');
+});
+
+test('reopening clears the choice and keeps the same search, messages and private state', async t => {
+  const {db}=temporaryDb(t);
+  add(db,601,[]);add(db,602,[]);
+  updateApplicant(db,'601',{favorite:true,notes:'Nota conservada'});
+  updateApplicant(db,'602',{discarded:true});
+  const original=getOpenPeriod(db,'13579135'),boundary=periodActivityStartsAt(db,original);
+  closePeriod(db,'13579135',original.id,'chat:601');
+  const saved=()=>JSON.stringify(['applicants','conversations','messages','profile_fields','visits']
+    .map(table=>db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
+  const before=saved();
+  const server=createServer(db);
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const url=`/api/properties/13579135/periods/${encodeURIComponent(original.id)}/reopen`;
+  const post={method:'POST',headers:{'Content-Type':'application/json'},body:'{}'};
+  assert.equal((await request(server,url,{...post,headers:{...post.headers,Origin:'http://evil.example'}})).status,403);
+  for(const body of ['null','[]','{"chosenApplicantId":"chat:602"}','{'])
+    assert.equal((await request(server,url,{...post,body})).status,400);
+  assert.equal(getPeriod(db,'13579135',original.id).status,'closed');
+  const response=await request(server,url,post);
+  assert.equal(response.status,200);
+  const reopened=(await response.json()).period;
+  assert.deepEqual(reopened,{...original,status:'open',chosenApplicantId:null,chosenApplicantName:null,
+    closedAt:null,housingTitle:null,housingAddress:null});
+  assert.equal(periodActivityStartsAt(db,reopened),boundary);
+  assert.equal(saved(),before);
+  assert.equal(getProperty(db).activePeriodId,original.id);
+  assert.equal(getProperty(db).lastClosedPeriod,null);
+  assert.equal(listPeriods(db,'13579135').length,1);
+  assert.equal((await request(server,url,post)).status,409);
+  assert.equal((await request(server,url.replace('13579135','unknown'),post)).status,404);
+  assert.equal((await request(server,url.replace(encodeURIComponent(original.id),'unknown'),post)).status,404);
+  updateApplicant(db,'601',{notes:'Se puede editar de nuevo'});
+  closePeriod(db,'13579135',original.id,'chat:602');
+  assert.equal(getPeriod(db,'13579135',original.id).chosenApplicantName,'Solicitante 602');
+});
+
+test('reopening cannot cross later searches, deleted housing or conflicting listing ownership', t => {
+  const {db}=temporaryDb(t);
+  add(db,611,[]);
+  const original=getOpenPeriod(db,'13579135');
+  closePeriod(db,'13579135',original.id,'chat:611');
+  updateProperty(db,'13579135',{idealistaUrl:null});
+  const other=createProperty(db,{title:'Otra vivienda',rentalSince:'2026-09-23',
+    idealistaUrl:original.url});
+  assert.throws(()=>reopenPeriod(db,other.id,original.id),{code:'PERIOD_NOT_FOUND'});
+  assert.throws(()=>reopenPeriod(db,'13579135',original.id),{code:'DUPLICATE_PROPERTY'});
+  assert.equal(getPeriod(db,'13579135',original.id).chosenApplicantId,'chat:611');
+  assert.equal(getProperty(db).defaultIdealistaId,null);
+  updateProperty(db,other.id,{idealistaUrl:null});
+  reopenPeriod(db,'13579135',original.id);
+  assert.equal(getProperty(db).defaultIdealistaUrl,original.url);
+  closePeriod(db,'13579135',original.id,'chat:611');
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const next=createPeriod(db,'13579135',{rentalSince:today},today);
+  assert.throws(()=>reopenPeriod(db,'13579135',original.id),{code:'PERIOD_OPEN'});
+  const selected=createManualApplicant(db,'13579135',{name:'Otra elección'},next.id);
+  closePeriod(db,'13579135',next.id,selected.applicant_id);
+  assert.throws(()=>reopenPeriod(db,'13579135',original.id),{code:'PERIOD_NOT_LATEST'});
+  const boundary=periodActivityStartsAt(db,next);
+  const latest=reopenPeriod(db,'13579135',next.id);
+  assert.equal(periodActivityStartsAt(db,latest),boundary);
+  assert.equal(getPeriod(db,'13579135',original.id).chosenApplicantId,'chat:611');
+  closePeriod(db,'13579135',next.id,selected.applicant_id);
+  deleteProperty(db,'13579135');
+  assert.throws(()=>reopenPeriod(db,'13579135',next.id),{code:'PROPERTY_NOT_FOUND'});
+  assert.equal(getPeriod(db,'13579135',next.id).status,'closed');
+});
+
 test('closed search period preserves history and reused chat starts independent data', async t => {
   const {db}=temporaryDb(t);
   add(db,501,[]);
@@ -627,6 +720,9 @@ test('closed search period preserves history and reused chat starts independent 
   assert.equal(closed.chosenApplicantName,'Solicitante 501');
   assert.equal(closed.housingTitle,'Piso de prueba');
   assert.equal(getProperty(db).activePeriodId,null);
+  const home=(await (await request(server,'/api/properties')).json()).properties;
+  assert.deepEqual(home.find(p=>p.id==='13579135').lastClosedPeriod,
+    {id:original.id,chosenApplicantId:'chat:501',chosenApplicantName:'Solicitante 501'});
   assert.equal((await request(server,`${root}/${encodeURIComponent(original.id)}/applicants?status=all`)).status,200);
   assert.equal((await request(server,`${root}/${encodeURIComponent(original.id)}/applicants/chat%3A501`,{
     method:'PATCH',headers:json,body:'{"notes":"changed"}'})).status,409);

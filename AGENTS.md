@@ -84,7 +84,8 @@ ejecutado la integración alojada.
 - La identidad de una conversación es fuente del anuncio + periodo + chat
   externo. No deduzcas identidad ni agrupes conversaciones por nombre.
 - Las propiedades pueden tener varios periodos y fuentes de anuncio. Un periodo
-  cerrado es histórico e inmutable; una eliminación normal es recuperable. El
+  cerrado es histórico y de solo lectura, salvo la reapertura explícita del último
+  periodo si no existe uno posterior; una eliminación normal es recuperable. El
   borrado permanente conserva tombstones para impedir reimportaciones ambiguas.
 - Las importaciones deben validar primero y ser atómicas: ante fallo se conserva
   lo previo, incluido un historial no visitado o más completo.
@@ -100,7 +101,8 @@ ejecutado la integración alojada.
 ## Cambios y verificación
 
 - Mantén los límites de propiedad, periodo, fuente y estado en cada consulta y
-  operación de escritura. Rechaza cambios sobre periodos cerrados.
+  operación de escritura. Rechaza cambios sobre periodos cerrados salvo la
+  operación explícita de reapertura, que conserva sus datos y retira la elección.
 - Amplía pruebas de unidad/servidor para lógica de base, importación y sync;
   amplía `test/ui.mjs` para flujos de interfaz. Usa datos sintéticos y pruebas
   aisladas, nunca Chrome ni datos reales.
