@@ -2,6 +2,10 @@
 
 **Morada** reúne los interesados de tus anuncios de Idealista para compararlos y seguir cada búsqueda de alquiler. Guarda tus notas, favoritos y decisiones en un espacio privado; los mensajes se responden siempre desde Idealista.
 
+![Mis viviendas en Morada, con datos ficticios](docs/screenshots/viviendas.png)
+
+La [galería de pantallas](docs/GALERIA.md) recorre las vistas, formularios y versión móvil. Todas las capturas usan datos inventados en una base de demostración independiente.
+
 ## Empezar
 
 En **Mis viviendas**, pulsa **Añadir vivienda**. Desde el espacio de trabajo también puedes elegir **Gestionar → Añadir vivienda**. Escribe un nombre reconocible, la fecha desde la que buscas inquilino y, si quieres, la dirección, el alquiler y la URL del anuncio de Idealista. La URL es opcional: sin ella también puedes crear interesados manualmente.
@@ -24,9 +28,13 @@ Desde **Gestionar → Editar vivienda** puedes eliminar una vivienda. Aparecerá
 
 ## Interesados y conversaciones
 
+![Interesados, filtros y seguimiento con datos ficticios](docs/screenshots/interesados.png)
+
 Puedes crear una ficha con **Añadir interesado** y completar nombre, contacto, personas, niños, mascotas, ingresos y notas privadas.
 
 ### Visitas
+
+![Calendario y agenda de visitas ficticias](docs/screenshots/calendario.png)
 
 Cuando una persona quiera ver la vivienda, abre su ficha y pulsa **Programar visita**. La cita se crea manualmente: Morada no interpreta ni confirma automáticamente los mensajes del chat. Empieza en **Pendiente de confirmar**, dura 30 minutos por defecto y puedes marcarla como **Confirmada**, **Realizada** o **Cancelada**. Desde la misma ficha puedes reprogramar una visita sin crear otra distinta.
 

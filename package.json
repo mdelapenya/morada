@@ -15,7 +15,9 @@
     "export:today": "node scripts/export-today.mjs",
     "probe:cookies": "node scripts/probe-cookies.mjs",
     "login": "node scripts/browser.mjs login",
-    "inspect": "node scripts/browser.mjs inspect"
+    "inspect": "node scripts/browser.mjs inspect",
+    "demo": "node --experimental-sqlite tools/demo-data.mjs",
+    "docs:screenshots": "node --experimental-sqlite tools/capture-docs.mjs"
   },
   "files": [
     "app/",

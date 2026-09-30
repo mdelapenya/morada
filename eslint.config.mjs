@@ -19,7 +19,7 @@ export default [
     rules,
   },
   {
-    files: ['test/ui.mjs'],
+    files: ['test/ui.mjs', 'tools/capture-docs.mjs'],
     languageOptions: { globals: globals.browser },
   },
 ];

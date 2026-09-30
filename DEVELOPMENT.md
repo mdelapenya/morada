@@ -21,6 +21,30 @@ Las exportaciones `.ics` se tratan como datos privados mínimos: no contienen no
 
 ## Comprobaciones
 
+### Demostración y capturas
+
+Para explorar la aplicación con datos ficticios, ejecuta `npm run demo`. Se crea una base SQLite nueva en un subdirectorio exclusivo de `.demo/`, y el servidor muestra su propia URL local con un puerto libre. Cierra la demo con Ctrl+C. Cada ejecución crea otra base; no reutiliza ni sobrescribe bases existentes.
+
+El generador ignora `IDEALISTA_DB`, `IDEALISTA_RUNTIME_DIR` y `PORT`, y sustituye `IDEALISTA_LEGACY_PROPERTY_FILE` por una configuración vacía creada dentro de esa demo antes de cargar la aplicación. No lee `.local/`, no copia exportaciones, no conecta con Chrome y no reinicia el servidor habitual. La sincronización real está desactivada en el servidor de demostración.
+
+La muestra contiene cinco viviendas, once interesados, búsquedas abiertas y cerradas, una vivienda eliminada, conversaciones, favoritos, descartes, notas y seis visitas con diferentes estados. Los nombres y direcciones son inventados y los correos usan `example.test`. La fecha de referencia de las capturas es el 15 de octubre de 2026; al explorar manualmente el calendario, navega a ese mes.
+
+Para regenerar la [galería](docs/GALERIA.md) y las imágenes del README:
+
+```sh
+npm ci
+npx playwright install --with-deps chromium
+npm run docs:screenshots
+```
+
+El comando crea otra base aislada, arranca un servidor temporal y toma las capturas con Chromium de Playwright, en escritorio y móvil. Solo permite solicitudes al servidor de esa demo. Los estados de éxito con avisos y error de sincronización se simulan explícitamente; el resto de las vistas y formularios usa la API y la base sintética. Al terminar se cierran el navegador y el servidor; la base y su manifiesto quedan en `.demo/` para inspección local, excluidos de Git y del build.
+
+`tools/demo-data.mjs` define los datos y las barreras de aislamiento. `tools/capture-docs.mjs` recorre la interfaz y genera `docs/GALERIA.md`. `tools/documentation-scenes.mjs` enumera todas las capturas; el build usa esa lista explícita para incluir únicamente la galería y sus imágenes públicas. No copies capturas de tu sesión personal a `docs/screenshots/`.
+
+`test/demo.test.mjs` comprueba el aislamiento en un proceso separado, con rutas de entorno señuelo: verifica que no se lea `.local/`, que dos demos no compartan datos y que no se ejecute ningún proceso para acceder a Chrome.
+
+### Pruebas y build
+
 Ejecuta, según lo que vayas a revisar:
 
 ```sh

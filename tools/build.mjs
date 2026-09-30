@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { copyFile, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { documentationScenes } from './documentation-scenes.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = path.join(root, 'dist');
@@ -10,6 +11,8 @@ const files = [
   'package-lock.json',
   'README.md',
   'DEVELOPMENT.md',
+  'docs/GALERIA.md',
+  ...documentationScenes.map(([name]) => `docs/screenshots/${name}.png`),
   'app/arrival.mjs',
   'app/database.mjs',
   'app/import.mjs',
