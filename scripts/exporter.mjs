@@ -357,7 +357,7 @@ async function extract(ev,wait,entry,maxSteps,propertyId,knownInPeriod=false){
   virtualized ||= snapshot.historyText!==oldest;
   if(propertyId){
     if(!observedProperties.size){
-      if(!knownInPeriod)throw new Error(`No se pudo comprobar el anuncio del chat ${entry.id}. No está vinculado a este anuncio y periodo en Morada y no muestra el enlace del anuncio en Chrome.`);
+      if(!knownInPeriod)return {unverifiedProperty:true};
     }else if(![...observedProperties.values()].some(p=>matchesProperty(p.url,propertyId)))return null;
   }
   let profile=null;
@@ -460,7 +460,7 @@ export async function exportToday({knownIds=[],sinceDate,untilDate,propertyId,pe
       const entries=new Map(index.conversations.map(c=>[c.id,c]));
       if(!refreshExisting)for(const card of scan.cards)entries.set(card.id,{...entries.get(card.id),...card,status:entries.get(card.id)?.status??'pendiente'});
       index.conversations=[...entries.values()];await save(dir,'index.json',index);
-      let files=[];let exported=0,processed=0,skippedProperty=0,skippedNoPeriodActivity=0;
+      let files=[];let exported=0,processed=0,skippedProperty=0,skippedUnverified=0,skippedNoPeriodActivity=0;
       let examined=0,earlyStopped=false,stopReason=null,unchangedStreak=0,finalVisited=0,headRechecked=false;
       let effectiveMode=streaming&&scan.head?'incremental':'full';
       let restarted=false;
@@ -480,7 +480,7 @@ export async function exportToday({knownIds=[],sinceDate,untilDate,propertyId,pe
             if(!prefixMatches){
               if(restarted)throw new Error('El listado de chats cambió durante la sincronización. Revisa Chrome y reintenta.');
               restarted=true;effectiveMode='full';unchangedStreak=0;
-              files=[];exported=0;processed=0;skippedProperty=0;skippedNoPeriodActivity=0;finalVisited=0;
+              files=[];exported=0;processed=0;skippedProperty=0;skippedUnverified=0;skippedNoPeriodActivity=0;finalVisited=0;
               cursor=-1;continue;
             }
             if(cursor>=candidates.length)break;
@@ -499,6 +499,10 @@ export async function exportToday({knownIds=[],sinceDate,untilDate,propertyId,pe
         const result=await extract(ev,wait,entry,maxListSteps,refreshExisting?propertyId:null,Boolean(periodId)&&known.has(card.id));
         onProgress({phase:'exporting',discovered:scan.discovered,candidates:candidates.length,exported,examined});
         if(!result){skippedProperty++;continue;}
+        if(result.unverifiedProperty){
+          if(!periodId)throw new Error(`No se pudo comprobar el anuncio del chat ${entry.id}. No muestra el enlace del anuncio en Chrome.`);
+          skippedUnverified++;unchangedStreak=0;continue;
+        }
         if(periodId){
           const incomplete=result.integrity.notes.some(note=>/virtualiz|contenido cambió|controles en el historial|estabiliz|historial.*carg/i.test(note));
           if(incomplete)throw new Error(`No se pudo verificar el historial completo del chat ${entry.id}. Revisa Chrome y reintenta.`);
@@ -509,7 +513,7 @@ export async function exportToday({knownIds=[],sinceDate,untilDate,propertyId,pe
         }
         const fingerprint=periodId?fingerprintMessageHistory(result.periodMessages):null;
         const comparable=effectiveMode==='incremental'&&known.has(card.id)&&fingerprint!==null&&baselineById[card.id]===fingerprint;
-        unchangedStreak=comparable?unchangedStreak+1:0;
+        unchangedStreak=comparable?Math.min(unchangedStreak+1,unchangedThreshold):0;
         entries.set(card.id,entry);index.conversations=[...entries.values()];
         const file=await save(dir,`${entry.id}.json`,result);
         const md=[`# ${entry.name}`,`Chat: ${entry.id} · Extraído: ${result.exportedAt}`,`Historial: ${result.integrity.history} · Ficha: ${result.integrity.profile}`,`## Anuncio`,...result.properties.map(p=>`${p.text}\n${p.url}`),`## Conversación`,...result.messages.map(m=>`### ${m.dateLabel??'Fecha no disponible'} · ${m.time??'Hora no disponible'} · ${m.author}\n\n${m.rawText}`),`## Ficha de inquilino`,result.profile?.text??'No disponible en Ver perfil.',`## Integridad`,...result.integrity.notes.map(n=>`- ${n}`),`## Historial visible original`,result.historyText].join('\n\n')+'\n';
@@ -517,7 +521,7 @@ export async function exportToday({knownIds=[],sinceDate,untilDate,propertyId,pe
         Object.assign(entry,{status:'guardado',messages:result.messages.length,profile:result.integrity.profile,history:result.integrity.history});
         await save(dir,'index.json',index);files.push(file);exported++;processed++;
         onProgress({phase:'exporting',discovered:scan.discovered,candidates:candidates.length,exported,examined});
-        if(effectiveMode==='incremental'&&unchangedStreak>=unchangedThreshold&&(streaming||cursor<candidates.length-1)){
+        if(effectiveMode==='incremental'&&!skippedUnverified&&unchangedStreak>=unchangedThreshold&&(streaming||cursor<candidates.length-1)){
           if(await recheckHead(ev,wait,scan.head,day)){
             headRechecked=true;earlyStopped=true;stopReason='unchanged_streak';break;
           }
@@ -528,7 +532,7 @@ export async function exportToday({knownIds=[],sinceDate,untilDate,propertyId,pe
           streaming=false;
           scan=await discover(ev,wait,maxListSteps,day,cutoff,end,refreshExisting);
           candidates=sync&&!refreshExisting?scan.cards.filter(c=>!known.has(c.id)):scan.cards;
-          files=[];exported=0;processed=0;skippedProperty=0;skippedNoPeriodActivity=0;finalVisited=0;
+          files=[];exported=0;processed=0;skippedProperty=0;skippedUnverified=0;skippedNoPeriodActivity=0;finalVisited=0;
           index.listIntegrity=scan.listIntegrity;index.boundaryDate=scan.boundary;
           onProgress({phase:'exporting',discovered:scan.discovered,candidates:candidates.length,exported:0,examined});
           cursor=-1;
@@ -544,15 +548,16 @@ export async function exportToday({knownIds=[],sinceDate,untilDate,propertyId,pe
           throw new Error('El listado de chats cambió durante la sincronización. Revisa Chrome y reintenta.');
         headRechecked=true;
       }
-      const fullCoverage=!earlyStopped&&finalVisited===candidates.length;
+      const fullCoverage=!earlyStopped&&!skippedUnverified&&finalVisited===candidates.length;
       if(earlyStopped){
         index.listIntegrity='Recorrido reciente detenido tras cinco chats sin cambios; final del listado no comprobado.';
         index.boundaryDate=null;
       }
-      Object.assign(index,{scanStatus:'complete',requestedMode:scanMode,effectiveMode,examined,earlyStopped,stopReason,unchangedStreak,unchangedThreshold,fullCoverage,headRechecked});
+      if(skippedUnverified)index.listIntegrity+=` ${skippedUnverified} chats sin anuncio verificable; no se importaron y la cobertura no es completa.`;
+      Object.assign(index,{scanStatus:'complete',requestedMode:scanMode,effectiveMode,examined,earlyStopped,stopReason,unchangedStreak,unchangedThreshold,fullCoverage,headRechecked,skippedUnverified});
       index.updatedAt=new Date().toISOString();await save(dir,'index.json',index);
       await save(dir,'index.md',`# Chats de ${day}\n\n${index.criterion}\n\n${index.listIntegrity}\n\n`+index.conversations.map(e=>`- [${e.name}](${e.id}.md) — ${e.date} — ${e.status}${e.messages!==undefined?` — ${e.messages} mensajes — ficha: ${e.profile}`:''}`).join('\n')+'\n');
-      return {date:day,periodId:periodId??null,propertyId:refreshExisting?propertyId:null,sinceDate:cutoff,untilDate:end,activityStartsAt:activityStartsAt??null,includeLegacyHistory,files,discovered:scan.discovered,candidates:candidates.length,exported,skippedProperty,skippedNoPeriodActivity,requestedMode:scanMode,effectiveMode,examined,earlyStopped,stopReason,unchangedStreak,unchangedThreshold,fullCoverage,headRechecked,directory:dir};
+      return {date:day,periodId:periodId??null,propertyId:refreshExisting?propertyId:null,sinceDate:cutoff,untilDate:end,activityStartsAt:activityStartsAt??null,includeLegacyHistory,files,discovered:scan.discovered,candidates:candidates.length,exported,skippedProperty,skippedUnverified,skippedNoPeriodActivity,requestedMode:scanMode,effectiveMode,examined,earlyStopped,stopReason,unchangedStreak,unchangedThreshold,fullCoverage,headRechecked,directory:dir};
     } catch(error){throw safeError(error);}
   });
 }

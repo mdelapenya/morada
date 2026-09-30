@@ -19,7 +19,7 @@ const emptyJob = () => ({ id: null, state: 'idle', phase: null, propertyId: null
   discovered: 0, candidates: 0, exported: 0,
   imported: 0, updated: 0, newIncomingApplicants: 0, newIncomingMessages: 0,
   requestedMode:null,effectiveMode:null,examined:0,earlyStopped:false,stopReason:null,
-  unchangedStreak:0,unchangedThreshold,fullCoverage:false,headRechecked:false,
+  unchangedStreak:0,unchangedThreshold,fullCoverage:false,headRechecked:false,skippedUnverified:0,
   error: null, errorCode: null });
 
 export function madridToday() {
@@ -80,37 +80,41 @@ async function loadResult(db, result, exportsRoot, sinceDate, untilDate, idealis
     result.exported !== result.files.length) {
     throw failure('INVALID_RESULT', 'La extracción terminó con un resultado no válido. Vuelve a sincronizar.');
   }
+  const skippedUnverified=result.skippedUnverified??0;
+  if(!validCount(skippedUnverified)||skippedUnverified>result.candidates)
+    throw failure('INVALID_RESULT','La extracción no confirmó los chats sin anuncio verificable. Vuelve a sincronizar.');
   const hasScanMetadata=['requestedMode','effectiveMode','examined','earlyStopped','stopReason',
-    'unchangedStreak','unchangedThreshold','fullCoverage','headRechecked']
+    'unchangedStreak','unchangedThreshold','fullCoverage','headRechecked','skippedUnverified']
     .some(key=>result[key]!==undefined);
   let scan;
   if(!hasScanMetadata){
     if(canEarlyStop) throw failure('INVALID_RESULT','La extracción no confirmó el resultado incremental. Vuelve a sincronizar.');
     scan={requestedMode,effectiveMode:'full',examined:result.candidates,
       earlyStopped:false,stopReason:null,unchangedStreak:0,unchangedThreshold,
-      fullCoverage:false,headRechecked:false,verifiedCoverage:false};
+      fullCoverage:false,headRechecked:false,verifiedCoverage:false,skippedUnverified};
   }else{
     const fallbackToFull=canEarlyStop && requestedMode==='incremental' &&
       effectiveMode==='incremental' && result.effectiveMode==='full' &&
-      result.fullCoverage===true && result.headRechecked===true &&
+      (result.fullCoverage===true || skippedUnverified>0) && result.headRechecked===true &&
       result.earlyStopped===false;
     if(result.requestedMode!==requestedMode ||
       (result.effectiveMode!==effectiveMode && !fallbackToFull) ||
       !validCount(result.examined) || result.examined>20000 ||
-      result.exported>result.examined || typeof result.earlyStopped!=='boolean' ||
+      result.exported+skippedUnverified>result.examined || typeof result.earlyStopped!=='boolean' ||
       typeof result.fullCoverage!=='boolean' || typeof result.headRechecked!=='boolean' ||
       !validCount(result.unchangedStreak) || result.unchangedStreak>unchangedThreshold ||
       result.unchangedThreshold!==unchangedThreshold ||
+      (skippedUnverified>0 && (result.fullCoverage || result.earlyStopped || !result.headRechecked || result.examined<result.candidates)) ||
       (result.earlyStopped ? (!canEarlyStop || effectiveMode!=='incremental' ||
         result.stopReason!=='unchanged_streak' || result.unchangedStreak!==unchangedThreshold ||
         result.fullCoverage || !result.headRechecked) :
-        (result.stopReason!==null || !result.fullCoverage)))
+        (result.stopReason!==null || (!result.fullCoverage && !skippedUnverified))))
       throw failure('INVALID_RESULT','La extracción no confirmó el alcance de la sincronización. Vuelve a sincronizar.');
     scan={requestedMode,effectiveMode:result.effectiveMode,examined:result.examined,
       earlyStopped:result.earlyStopped,stopReason:result.stopReason,
       unchangedStreak:result.unchangedStreak,unchangedThreshold,
       fullCoverage:result.fullCoverage,headRechecked:result.headRechecked,
-      verifiedCoverage:result.fullCoverage};
+      verifiedCoverage:result.fullCoverage,skippedUnverified};
   }
   const dateDir = path.resolve(exportsRoot, result.date, `property-${idealistaPropertyId}`,
     ...(result.periodId ? [`period-${encodeURIComponent(periodId)}`] : []));
@@ -353,7 +357,7 @@ export function createSyncController(db, options = {}) {
         requestedMode:scan.requestedMode,effectiveMode:scan.effectiveMode,
         examined:scan.examined,earlyStopped:scan.earlyStopped,stopReason:scan.stopReason,
         unchangedStreak:scan.unchangedStreak,unchangedThreshold:scan.unchangedThreshold,
-        fullCoverage:scan.fullCoverage,headRechecked:scan.headRechecked };
+        fullCoverage:scan.fullCoverage,headRechecked:scan.headRechecked,skippedUnverified:scan.skippedUnverified };
     } catch (error) {
       fail(error);
     } finally {

@@ -306,10 +306,39 @@ test('hidden listing refresh uses only known IDs in a period and keeps the obser
   }
 }));
 
-test('missing listing cannot use an unknown ID or unscoped known ID',async t=>inTemp(t,async root=>{
-  for(const options of [periodOptions,{sync:true,refreshExisting:true,propertyId:'13579135',knownIds:['1']}]){
-    const browser=fake({pages:[[card('1')]],propertyById:{'1':[]}});
-    await assert.rejects(exportToday({root,connectBrowser:()=>browser.ev,wait:instant,...options}),/No se pudo comprobar el anuncio/);
+test('missing listing cannot use an unscoped known ID',async t=>inTemp(t,async root=>{
+  const browser=fake({pages:[[card('1')]],propertyById:{'1':[]}});
+  await assert.rejects(exportToday({root,connectBrowser:()=>browser.ev,wait:instant,
+    sync:true,refreshExisting:true,propertyId:'13579135',knownIds:['1']}),/No se pudo comprobar el anuncio/);
+}));
+
+test('unknown chats without listing evidence are skipped without certifying a full baseline',async t=>inTemp(t,async root=>{
+  const browser=fake({pages:[[card('1')]],propertyById:{'1':[]}});
+  const result=await exportToday({root,connectBrowser:()=>browser.ev,wait:instant,...periodOptions});
+  assert.equal(result.skippedUnverified,1);
+  assert.equal(result.fullCoverage,false);
+  assert.equal(result.headRechecked,true);
+  assert.equal(result.exported,0);
+  assert.deepEqual(result.files,[]);
+  assert.ok(!(await readdir(result.directory)).includes('1.json'));
+}));
+
+test('a closed listing with an unknown chat still exports known and verifiable chats before and after it',async t=>inTemp(t,async root=>{
+  for(const scanMode of ['full','incremental']){
+    const browser=fake({pages:[[card('1'),card('2'),card('3'),card('4')]],
+      propertyById:{'1':[],'2':[],'3':[]}});
+    const result=await exportToday({root:path.join(root,scanMode),connectBrowser:()=>browser.ev,wait:instant,
+      ...periodOptions,knownIds:['1','3'],scanMode,canEarlyStop:scanMode==='incremental'});
+    assert.equal(result.skippedUnverified,1);
+    assert.equal(result.skippedProperty,0);
+    assert.equal(result.examined,4);
+    assert.equal(result.fullCoverage,false);
+    assert.equal(result.headRechecked,true);
+    assert.deepEqual(result.files.map(file=>path.basename(file)),['1.json','3.json','4.json']);
+    const index=JSON.parse(await readFile(path.join(result.directory,'index.json'),'utf8'));
+    assert.equal(index.skippedUnverified,1);
+    assert.equal(index.fullCoverage,false);
+    assert.ok(!(await readdir(result.directory)).includes('2.json'));
   }
 }));
 
@@ -416,6 +445,19 @@ const baselineHash=(text='Hola',direction='received')=>fingerprintMessageHistory
 const sevenCards=()=>[[...Array.from({length:7},(_,i)=>card(String(i+1)))],[card('99','Ayer')]];
 const sevenBaselines=()=>Object.fromEntries(Array.from({length:7},(_,i)=>[String(i+1),baselineHash()]));
 const incremental={...periodOptions,scanMode:'incremental',canEarlyStop:true,unchangedThreshold:5};
+
+test('unverified chats prevent early stop so older known hidden chats are still refreshed',async t=>inTemp(t,async root=>{
+  const browser=fake({pages:[[card('8'),...sevenCards()[0]],sevenCards()[1]],
+    propertyById:{'8':[],'7':[]},messageById:{'7':'Nuevo mensaje'}});
+  const result=await exportToday({root,connectBrowser:()=>browser.ev,wait:instant,...incremental,
+    knownIds:Object.keys(sevenBaselines()),baselineById:sevenBaselines()});
+  assert.equal(result.skippedUnverified,1);
+  assert.equal(result.examined,8);
+  assert.equal(result.earlyStopped,false);
+  assert.equal(result.fullCoverage,false);
+  assert.equal(result.exported,7);
+  assert.equal(JSON.parse(await readFile(result.files.at(-1),'utf8')).periodMessages[0].text,'Nuevo mensaje');
+}));
 
 test('ordered semantic fingerprint ignores profile/display noise but detects outgoing and duplicate turns',()=>{
   const first=baselineMessage();

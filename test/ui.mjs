@@ -547,6 +547,17 @@ try {
   assert.deepEqual(syncPostBodies.at(-1),{mode:'full'});
   fakeSyncJob={...fakeSyncJob,state:'succeeded',phase:null,examined:22,candidates:20,fullCoverage:true,earlyStopped:false,stopReason:null,error:null,imported:0,updated:0};
   await page.locator('#syncStatus').getByText(/Revisión completa finalizada.*22 revisiones de chat.*20 candidatos en el listado/).waitFor({timeout:2500});
+  await openSyncOptions();
+  await page.locator('#syncFull').click();
+  fakeSyncJob={...fakeSyncJob,state:'succeeded',phase:null,examined:3,candidates:3,
+    fullCoverage:false,skippedUnverified:1,earlyStopped:false,stopReason:null,error:null,imported:0,updated:2};
+  await page.locator('#syncStatus').getByText(/Sincronización finalizada con avisos.*2 historiales actualizados.*1 chat sin importar porque no se pudo comprobar su anuncio/).waitFor({timeout:2500});
+  assert.doesNotMatch(await page.locator('#syncStatus').innerText(),/Revisión completa finalizada/);
+  assert.equal(await page.locator('#syncError').isVisible(),false,'unverified chats do not turn a successful refresh into a failure');
+  assert.equal(await page.locator('#sync').isDisabled(),false,'sync remains available after a warning');
+  await page.reload({waitUntil:'networkidle'});
+  await openSyncDetails();
+  await page.locator('#syncStatus').getByText(/1 chat sin importar/).waitFor();
   const receivedOnly=await page.evaluate(async ({propertyId,periodId})=>{const result=await fetch(`/api/properties/${propertyId}/periods/${periodId}/applicants?status=all`).then(r=>r.json());return result.items.find(item=>item.name==='Alba');},{propertyId:originalPropertyId,periodId:originalPeriodId});
   assert.equal(receivedOnly.hasReplied,false,'real received-only chat has no owner reply');
   assert.equal(receivedOnly.awaitingReply,null,'undated legacy message cannot assert a pending turn');
@@ -899,7 +910,8 @@ try {
   }
   await page.setViewportSize({width:1440,height:980});
   await page.getByRole('button',{name:'Mes siguiente'}).click();
-  await page.locator('#agendaItems').getByText('Alba').waitFor();
+  // The previous month's agenda can already contain Alba on September 30.
+  await page.locator('#agendaItems').getByText(/30 sept.*23:45.*en curso/i).waitFor();
   assert.ok(await page.locator('#calendarDays .calendar-event').count()>0,'a visit beginning in the halo appears on its overlapping October day');
   assert.match(await page.locator('#agendaItems').innerText(),/30 sept.*23:45.*en curso/i,'an overnight visit identifies its prior-day start in the next-day agenda');
   await page.getByRole('button',{name:/15 de octubre de 2026/}).click();

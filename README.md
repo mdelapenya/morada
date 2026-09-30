@@ -46,7 +46,7 @@ Para incorporar conversaciones, pulsa **Sincronizar** en la búsqueda abierta. L
 
 Cada conversación se conserva una sola vez dentro de su búsqueda. Si varios chats parecen pertenecer a la misma persona, siguen siendo conversaciones distintas y no se unen automáticamente.
 
-Si ocultas el anuncio en Idealista después de alquilar la vivienda, puedes seguir actualizando los chats ya guardados para ese anuncio en la misma búsqueda abierta, aunque dejen de mostrar el enlace del anuncio. Un chat desconocido necesita ese enlace para comprobar a qué anuncio pertenece. Cerrar la búsqueda en Morada conserva su historial e impide nuevas sincronizaciones.
+Si cierras u ocultas el anuncio en Idealista después de alquilar la vivienda, puedes seguir actualizando los chats ya guardados para ese anuncio en la misma búsqueda abierta, aunque dejen de mostrar el enlace del anuncio. Un chat desconocido necesita ese enlace para comprobar a qué anuncio pertenece. Si no lo muestra, se omite con un aviso y se siguen sincronizando los chats verificables; la revisión no se marca como completa. No se asignan chats por nombre ni se modifica su vinculación. Cerrar la búsqueda en Morada conserva su historial e impide nuevas sincronizaciones.
 
 **Recargar listado**, junto a los resultados, solo vuelve a mostrar los datos ya guardados. No abre Chrome ni añade conversaciones nuevas.
 

@@ -169,6 +169,55 @@ test('sync refreshes a hidden listing from its saved identity and preserves note
   assert.equal(importExports(x.db,x.exportsRoot).imported,1);
 });
 
+test('sync imports verified chats with a warning for unknown closed listings and does not establish a baseline', async t => {
+  const x=await setup(t),periodId='initial:13579135';
+  const original=fixture('901');
+  importConversation(x.db,original,'prior/901.json',initialDate);
+  updateApplicant(x.db,'chat:901',{notes:'Nota sintética',favorite:true});
+  await x.api('POST');
+  const fresh=fixture('901',{periodId,propertyId:'13579135',properties:[],
+    sinceDate:initialDate,untilDate:date,activityStartsAt:x.contexts[0].activityStartsAt,includeLegacyHistory:true,
+    exportedAt:'2026-09-24T12:00:00.000Z',messages:[...original.messages,
+      {sequence:2,direction:'received',text:'Nuevo',rawText:'Nuevo',messageDate:date,occurredAt:'2026-09-24T08:00:00.000Z'}]});
+  const files=[x.write(fresh,date,'13579135',periodId),
+    x.write({...fresh,id:'902',properties:original.properties},date,'13579135',periodId)];
+  x.children[0].send(x.result(files,{...scanFields('incremental','full',3,3),
+    periodId,activityStartsAt:fresh.activityStartsAt,
+    skippedUnverified:1,fullCoverage:false,headRechecked:true}));x.children[0].finish();
+  const job=await x.settled();
+  assert.equal(job.state,'succeeded',job.error);
+  assert.equal(job.skippedUnverified,1);
+  assert.equal(job.updated,1);
+  assert.equal(job.imported,1);
+  assert.equal(job.newIncomingMessages,1);
+  assert.equal(job.fullCoverage,false);
+  assert.deepEqual({...x.db.prepare('SELECT notes,favorite FROM applicants WHERE id=?').get('chat:901')},
+    {notes:'Nota sintética',favorite:1});
+  assert.equal(x.db.prepare('SELECT count(*) AS n FROM conversations').get().n,2);
+  assert.equal(x.db.prepare('SELECT count(*) AS n FROM sync_source_baselines').get().n,0);
+  assert.equal(x.db.prepare('SELECT full_coverage FROM sync_batches').get().full_coverage,0);
+  await x.api('POST');
+  assert.equal(x.contexts[1].canEarlyStop,false);
+  x.children[1].send(x.result([],{...scanFields('incremental','full',1,1),
+    skippedUnverified:1,fullCoverage:false,headRechecked:true}));x.children[1].finish();
+  assert.equal((await x.settled()).state,'succeeded','all unknown chats yield a warning, not a failure');
+});
+
+test('unknown-listing warnings cannot bypass coverage validation or atomic imports', async t => {
+  const x=await setup(t);
+  const file=x.write(fixture('904'));
+  for(const overrides of [{skippedUnverified:-1},{skippedUnverified:1.5},
+    {skippedUnverified:3},{fullCoverage:true},{headRechecked:false},
+    {examined:1},{skippedUnverified:0},{earlyStopped:true,stopReason:'unchanged_streak',unchangedStreak:5}]){
+    await x.api('POST');
+    x.children.at(-1).send(x.result([file],{...scanFields('incremental','full',2,2),
+      skippedUnverified:1,fullCoverage:false,headRechecked:true,...overrides}));
+    x.children.at(-1).finish();
+    assert.equal((await x.settled()).errorCode,'INVALID_RESULT',JSON.stringify(overrides));
+    assert.equal(x.db.prepare('SELECT count(*) AS n FROM conversations').get().n,0);
+  }
+});
+
 test('missing or conflicting listing evidence cannot create or reassign chats and rolls back the batch', async t => {
   const x=await setup(t),periodId='initial:13579135';
   const original=fixture('902');
